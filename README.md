@@ -1,13 +1,11 @@
 # MC//Cost Risk
 
-**Monte Carlo cost risk analysis in a single HTML file. Know your P80.**
+**Monte Carlo cost risk analysis in a single HTML file. Know your P80.** **[• Live demo](https://frantis3k.github.io/monte-carlo-price-risk-modeling/mc_cost_risk.html)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![No install](https://img.shields.io/badge/install-none-brightgreen)
 ![Single file](https://img.shields.io/badge/size-1%20HTML%20file-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-blue)
-
-**[▶ Live demo](https://frantis3k.github.io/monte-carlo-price-risk-modeling/mc_cost_risk.html)**
 
 ![MC//Cost Risk GIF](docs/mc_cost_risk_demo.gif)
 
