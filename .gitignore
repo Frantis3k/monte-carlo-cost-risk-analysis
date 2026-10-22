@@ -1,0 +1,6 @@
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+*.csv

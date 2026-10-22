@@ -1,0 +1,1865 @@
+<!doctype html>
+<!--
+  MC//COST RISK – Monte Carlo cost risk analysis in a single file.
+
+  WHAT IT DOES
+    You list the cost items of a project and describe how uncertain each one is
+    (a probability distribution, e.g. "min 900, most likely 950, max 1150").
+    The tool then draws thousands of random "what-if" versions of the project
+    (trials), adds the items up in each one and shows how the total is spread.
+    From that you read e.g. P80 – a budget that is enough in 80 % of trials –
+    and the contingency you need on top of the base estimate.
+
+  HOW THE FILE IS ORGANISED 
+    <style>   CSS  – how things look (colours, sizes, layout).
+    <body>    HTML – what is on the page (panels, tables, buttons). Many parts
+              are empty placeholders that JavaScript fills in later.
+    <script>  JS   – the behaviour: the maths, the simulation and redrawing.
+
+  HOW DATA FLOWS
+    model (items, correlations, settings) → simulate() → lastRun (results)
+    → render…() functions turn the results into HTML/SVG on the page.
+    The model and saved scenarios are stored in the browser (localStorage).
+
+  HOW TO RUN IT
+    Just open this file in a web browser.
+-->
+<html lang="en">
+<head>
+<!-- utf-8 = can show any character (€, ≤, −…); viewport = render at real width on phones instead of a zoomed-out desktop page -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monte Carlo Cost Risk Analysis</title>
+<!-- Web fonts from Google Fonts. "preconnect" opens the connection early so the fonts arrive sooner.
+     Offline the page still works – every font list below ends with a font installed on the computer. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Michroma&family=Exo+2:wght@300;400;500&family=Saira+Condensed:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+/* =====================================================================
+   STYLES (CSS)
+   A CSS rule is "selector { property: value; }". The selector picks
+   elements: `.name` = elements with class="name", `#name` = the element
+   with id="name", `a b` = b inside a.
+   ===================================================================== */
+
+/* Design tokens: named values (CSS variables, written --name and used as var(--name)).
+   Colours, fonts and the glossy gradients are defined once here */
+:root {
+  --ink: #1b2148; --muted: #5d6488; --steel1: #2e2f86; --steel2: #5a5fc0;
+  --line: #d6daf0; --line2: #9aa1cc; --tint: #f5f6fd;
+  --orange: #e8741a; --orange-d: #b5531a; --accent: #4b47b8; --accent-light: #b3b8e6;
+  --danger: #b42318; --cyan: #7fe8ff;
+  --indigo: #3b3a9e; --violet: #6a5fc8; --peri: #8d9be0; --magenta: #8e1f7e; --pink: #e08acb; --cap-green: #3f9e6e;
+  --body: Verdana, Tahoma, Geneva, sans-serif;
+  --cond: "Saira Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --logo: "Michroma", "Orbitron", Verdana, sans-serif;
+  --num: "Orbitron", "Saira Condensed", Verdana, sans-serif;
+  --thin: "Exo 2", "Segoe UI", Verdana, sans-serif;
+  --mono: "Share Tech Mono", Consolas, "Lucida Console", monospace;
+  --chrome: linear-gradient(180deg, #ffffff 0%, #eef0f8 38%, #c3c8dc 52%, #e4e7f3 74%, #fafbff 100%);
+  --gel-indigo: linear-gradient(180deg, #d9dcff 0%, #8288e6 44%, #3b3a9e 52%, #5559c6 80%, #9aa2f2 100%);
+  --gel-orange: linear-gradient(180deg, #ffe0bd 0%, #ffa24a 44%, #e3700c 52%, #f78c2c 80%, #ffb466 100%);
+  --gel-magenta: linear-gradient(180deg, #f8d2ee 0%, #c95fae 44%, #8e1f7e 52%, #a93896 80%, #e08acb 100%);
+  --gel-green: linear-gradient(180deg, #d4f5e2 0%, #6cc796 44%, #2f8a5c 52%, #46a874 80%, #8fe0b4 100%);
+  --gel-blue: var(--gel-indigo);
+  --streaks: repeating-linear-gradient(180deg, transparent 0 7px, rgba(255,255,255,.55) 7px 8px, transparent 8px 13px, rgba(255,255,255,.3) 13px 14px);
+}
+/* width/height include padding and border – makes sizes predictable */
+* { box-sizing: border-box; }
+/* the HTML "hidden" attribute must always win, even over rules that set display: flex/grid */
+[hidden] { display: none !important; }
+/* "@media (condition)" applies rules only when the condition holds – here: screen wider than 760 px.
+   The whole interface is drawn as if the browser were zoomed to 80 % (not on phones – it would be too small there). */
+@media (min-width: 761px) { .site, #pop { zoom: .8; } }
+html { scroll-behavior: smooth; }
+/* accessibility: users who asked their OS for less motion get no animations or smooth scrolling */
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation: none !important; transition: none !important; } }
+body { margin: 0; font: 12.5px/1.5 var(--body); color: var(--ink); background-color: #c9d3ef; }
+/* Page background (circuit lines + soft gradients) on its own fixed layer.
+   ::before is a decorative pseudo-element – drawn by CSS, not present in the HTML.
+   Why not "background-attachment: fixed"? That repaints the background on every scroll and makes scrolling laggy. */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; will-change: transform;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='620' fill='none' stroke='%23ffffff' stroke-opacity='.55' stroke-width='1.4'%3E%3Cpath d='M40 0v60h120v40M100 0v30h260M200 0v120h60v80M300 0v50h90v300M360 0v20h160M420 0v400M460 0v180h-50v90M500 0v600M220 160h120v60M330 260h-90v140h60M380 330h80v140M440 420h-70v160M260 470h120'/%3E%3Cpath d='M240 120h60M150 100v50h-30' stroke-opacity='.35'/%3E%3C/svg%3E"),
+    radial-gradient(900px 640px at 6% 104%, rgba(255,255,255,1), rgba(230,244,255,.7) 35%, transparent 70%),
+    repeating-linear-gradient(180deg, transparent 0 22px, rgba(255,255,255,.35) 22px 23px, transparent 23px 40px, rgba(255,255,255,.18) 40px 42px),
+    linear-gradient(115deg, #eef6ff 0%, #c9def6 30%, #a9b8ea 62%, #6a74c8 100%);
+  background-position: right top, 0 0, 0 0, 0 0;
+  background-repeat: no-repeat, no-repeat, repeat, no-repeat; }
+
+/* ---------- chassis ----------
+   The outer metallic "device" frame (.site) with a screw in each corner (.screws)
+   and the inner screen (.inner) that holds everything else. */
+.site { position: relative; max-width: 1260px; margin: 18px auto; padding: 18px; border-radius: 22px;
+  background:
+    radial-gradient(600px 160px at 85% 0%, rgba(160,150,235,.28), transparent 70%),
+    linear-gradient(180deg, #fdfdff, #e1e4f3 48%, #cfd3ea 52%, #eef0fa);
+  border: 1px solid #9ba1c9;
+  box-shadow: inset 0 1px #fff, inset 0 -1px rgba(40,30,110,.18), 0 30px 60px -12px rgba(50,40,140,.38), 0 0 0 4px rgba(255,255,255,.45); }
+/* the four screws are four radial gradients painted in the corners – no images needed */
+.screws::before { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  --s: #fff 0 1.2px, #c4c8e2 1.8px, #7a7fae 3.6px, rgba(40,30,110,.18) 4.2px, transparent 4.8px;
+  background:
+    radial-gradient(circle at 11px 11px, var(--s)), radial-gradient(circle at calc(100% - 11px) 11px, var(--s)),
+    radial-gradient(circle at 11px calc(100% - 11px), var(--s)), radial-gradient(circle at calc(100% - 11px) calc(100% - 11px), var(--s)); }
+.inner { position: relative; border-radius: 12px; overflow: clip; background: linear-gradient(180deg, #eef1fb, #f5f7fd 40%, #e9ecf8); border: 1px solid #9ba1c9;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.8); }
+/* phones: drop the frame margins and screws so the content gets the full width */
+@media (max-width: 760px) { .site { margin: 0; padding: 5px; border-radius: 0; } .inner { border-radius: 6px; } .screws::before { display: none; } }
+
+/* ---------- masthead ----------
+   The header strip: logo on the left, tagline on the right, decorative chart (.motif) in between. */
+.masthead { position: relative; height: 128px; overflow: hidden; color: var(--indigo);
+  background:
+    radial-gradient(ellipse 420px 200px at 4% 120%, rgba(255,255,255,1), transparent 70%),
+    var(--streaks) 0 70px / 100% 40px no-repeat,
+    linear-gradient(100deg, #f4f9ff 0%, #dcebfb 38%, #b6c3ef 66%, #7c84d2 88%, #5a5fb8 100%); }
+/* translucent white band behind the logo (as in the original design) */
+.masthead::before { content: ""; position: absolute; left: 0; right: 0; top: 22px; height: 52px; pointer-events: none;
+  border-top: 1px solid rgba(255,255,255,.95); border-bottom: 1px solid rgba(255,255,255,.7);
+  background: linear-gradient(90deg, rgba(255,255,255,.8), rgba(255,255,255,.5) 50%, rgba(255,255,255,.8)); }
+/* thin coloured line along the bottom edge of the header */
+.masthead::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; pointer-events: none;
+  background: linear-gradient(90deg, rgba(106,95,200,0), #8d9be0 30%, #6a5fc8 70%, #e08acb); }
+.brand { position: absolute; left: 28px; top: 33px; z-index: 2; }
+.logo { font: 400 30px/1 var(--logo); letter-spacing: .14em; text-transform: lowercase; color: var(--indigo);
+  text-shadow: 0 1px 0 rgba(255,255,255,.9), 0 2px 6px rgba(60,50,160,.25); }
+.logo .sl { color: var(--orange); letter-spacing: 0; margin: 0 .12em; }
+.brand .sub { font: 400 15px/1 var(--thin); letter-spacing: .1em; margin-top: 18px; color: #4a3fae; }
+/* the tagline sits on the white band, so it uses dark text to stay readable */
+.tagline { position: absolute; right: 36px; top: 27px; z-index: 2; text-align: right; }
+.tagline b { display: block; font: 500 22px/1 var(--thin); letter-spacing: .06em; color: var(--indigo); text-shadow: 0 1px 0 rgba(255,255,255,.9); }
+.tagline span { display: block; margin-top: 4px; font: 400 13px/1.4 var(--thin); letter-spacing: .05em; color: #4a3fae; }
+/* decorative SVG chart in the header (see the <svg class="motif"> in the HTML) */
+.motif { position: absolute; right: 380px; top: 0; width: 400px; height: 128px; z-index: 1; }
+.motif text { font-family: var(--mono); font-size: 9px; fill: #ffffff; fill-opacity: .7; }
+.motif text.mx { fill: #3b3a9e; fill-opacity: .45; } .motif text.mx.d { fill: #e8741a; fill-opacity: .8; }
+.motif text.p80 { font-size: 10px; fill: #ffb066; fill-opacity: 1; font-weight: 700; }
+/* narrower screens: fade the motif out so it doesn't collide with the text; phones: smaller logo, tagline moves to the bottom */
+@media (max-width: 1100px) { .motif { right: 40px; opacity: .35; } }
+@media (max-width: 700px) { .masthead { height: 112px; } .masthead::before { top: 14px; height: 32px; } .logo { font-size: 20px; } .brand { left: 16px; top: 20px; } .brand .sub { letter-spacing: .08em; font-size: 12px; margin-top: 14px; }
+  .tagline { right: 12px; top: auto; bottom: 8px; } .tagline b { font-size: 15px; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.8); } .tagline span { display: none; } }
+
+/* ---------- command bar ----------
+   The toolbar with the section tabs and the main buttons. "position: sticky; top: 0"
+   keeps it stuck to the top of the window while the page scrolls under it. */
+.cmdbar { position: sticky; top: 0; z-index: 15; display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,.97) 0%, rgba(240,242,252,.95) 50%, rgba(226,230,246,.95) 100%);
+  border-top: 1px solid #fff; border-bottom: 1px solid #a3a9d4; box-shadow: 0 1px 0 rgba(141,155,224,.6), 0 6px 14px -4px rgba(60,50,160,.28); }
+/* tabs scroll sideways if they don't fit; the scrollbar itself is hidden (two rules: Firefox, then Chrome/Safari) */
+.tabs { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 5px 15px 5px 10px; border-radius: 999px; cursor: pointer; text-decoration: none;
+  font: 600 14px/1.2 var(--cond); letter-spacing: .02em; color: var(--steel1);
+  background: var(--chrome); border: 1px solid #a5abcf; box-shadow: inset 0 1px #fff, inset 0 -3px 5px rgba(255,255,255,.6), 0 3px 5px -2px rgba(40,30,110,.3); }
+.tabs a small { font: 700 11px var(--cond); color: var(--orange-d); }
+.tabs a { position: relative; overflow: hidden; }
+/* "shine" effect: a white skewed stripe parked left of the element slides across on hover */
+.tabs a::after, .pt::after { content: ""; position: absolute; top: 0; left: -70%; width: 45%; height: 100%; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.85), transparent); transform: skewX(-20deg); transition: left .55s; }
+.pt::after { width: 30%; background: linear-gradient(100deg, transparent, rgba(255,255,255,.7), transparent); transition-duration: .7s; }
+.tabs a:hover::after, .ph:hover .pt::after { left: 130%; }
+.tabs a:hover { border-color: #6a5fc8; box-shadow: inset 0 1px #fff, 0 0 9px rgba(130,120,240,.5); }
+/* .on = the tab of the section currently on screen (set by spy() in the script) */
+.tabs a.on { color: #fff; background: var(--gel-indigo); border-color: #2c2a7e; text-shadow: 0 -1px rgba(0,0,0,.35);
+  box-shadow: inset 0 1px rgba(255,255,255,.85), inset 0 -5px 9px rgba(200,200,255,.55), 0 0 12px rgba(110,100,230,.6); }
+.tabs a.on small { color: #ffe0bd; }
+/* status LED in each tab: grey = nothing yet, green (.ok) = done, orange (.stale) = out of date,
+   hollow ring (.opt) = optional step. The script sets the class in renderStatus(). */
+.tled { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: radial-gradient(circle at 35% 30%, #f5f6fb, #9a9fbd); box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+.tled.ok { background: radial-gradient(circle at 35% 30%, #e0ffe8, #22c24f); box-shadow: 0 0 6px #45e676; }
+.tled.stale { background: radial-gradient(circle at 35% 30%, #fff0d6, #f08a1c); box-shadow: 0 0 6px #ffa64a; }
+.tled.opt { background: transparent; box-shadow: inset 0 0 0 1px #9a9fbd; }
+.cmds { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; }
+#runTop { padding: 6px 20px; font: 700 15px/1 var(--cond); letter-spacing: .12em; }
+/* narrow screens: buttons on the first line, tabs wrap below them */
+@media (max-width: 900px) { .cmdbar { flex-wrap: wrap; } .cmds { width: 100%; justify-content: space-between; } .tabs { order: 2; flex-basis: 100%; } }
+
+/* ---------- content ----------
+   Page layout. .grid2 puts two panels side by side (60:40, or 50:50 with .even)
+   and stacks them into one column when the screen is too narrow. */
+.content { padding: 18px; }
+@media (max-width: 760px) { .content { padding: 8px; } }
+.grid2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; }
+@media (max-width: 1150px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+.grid2.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 760px) { .grid2.even { grid-template-columns: minmax(0, 1fr); } }
+/* wide tables scroll sideways inside their box instead of stretching the whole page */
+.scroll { overflow-x: auto; }
+
+/* ---------- panels: pearl frame + capsule title + soft floor shadow ----------
+   Every numbered section is a .panel: .ph = header strip, .pt = title capsule,
+   .pn = number badge, .pb = white body. scroll-margin-top stops the sticky
+   toolbar from covering the title when a tab scrolls to the panel. */
+.panel { position: relative; margin-bottom: 22px; padding: 6px 6px 16px; border-radius: 14px; scroll-margin-top: 64px;
+  --cap: var(--gel-indigo);
+  background: linear-gradient(180deg, #ffffff 0%, #e4e7f4 24%, #f3f4fb 55%, #cfd3ea 100%);
+  border: 1px solid #a3a9d4; box-shadow: 0 14px 22px -14px rgba(50,40,140,.45), inset 0 1px #fff; }
+.panel::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 16px; pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, rgba(141,155,224,.7) 20%, rgba(106,95,200,.7) 50%, rgba(224,138,203,.6) 80%, transparent) 50% 7px / 60% 1px no-repeat,
+    linear-gradient(90deg, transparent, rgba(255,255,255,.9) 30%, rgba(255,255,255,.9) 70%, transparent) 50% 8px / 60% 1px no-repeat; }
+.ph { position: relative; display: flex; align-items: center; height: 42px; padding: 0 10px 0 6px; overflow: hidden;
+  background: var(--streaks) 0 4px / 100% 34px no-repeat,
+    linear-gradient(100deg, #fbfdff 0%, #e7f0fc 45%, #c9d0f2 80%, #a7aee6 100%);
+  border: 1px solid #9ba1d0; border-bottom: 0; border-radius: 9px 9px 0 0; }
+.ph::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+  background: linear-gradient(90deg, #6a5fc8, #9fd8ff 35%, #ffffff 55%, rgba(224,138,203,.6) 80%, rgba(224,138,203,0)); box-shadow: 0 0 7px 1px rgba(150,140,255,.6); }
+/* panel title = silver capsule with a coloured number badge */
+.pt { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 22px 0 4px; border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #eef0f8 30%, #b9bfd8 55%, #d8dcec 78%, #f7f8fd 100%); color: var(--indigo);
+  border: 1px solid #9aa0c6; box-shadow: inset 0 1px #fff, inset 0 -4px 6px rgba(255,255,255,.7), 0 6px 8px -4px rgba(40,30,110,.45); }
+.pn { display: inline-flex; align-items: center; justify-content: center; min-width: 38px; height: 24px; padding: 0 8px; border-radius: 999px;
+  font: 900 15px/1 var(--num); color: #fff; background: var(--cap); text-shadow: 0 -1px rgba(0,0,0,.35);
+  border: 1px solid rgba(40,20,60,.35); box-shadow: inset 0 1px rgba(255,255,255,.8), inset 0 -3px 5px rgba(255,255,255,.35); }
+.pt h2 { margin: 0; font: 700 17px/1 var(--cond); letter-spacing: .03em; white-space: nowrap; color: var(--indigo); text-shadow: 0 1px 0 rgba(255,255,255,.95); }
+.pt h2 .sub { font-weight: 500; letter-spacing: .03em; color: var(--violet); text-transform: none; }
+.ph .help { margin-left: auto; align-self: center; position: relative; z-index: 1; }
+.pb { padding: 16px; background: #fff; border: 1px solid #9ba1d0; border-top: 0; border-radius: 0 0 9px 9px; }
+h3 { font: 700 14px/1.2 var(--cond); letter-spacing: .02em; color: var(--steel1); margin: 18px 0 6px;
+  padding: 3px 10px; border-radius: 0 12px 12px 0; border-left: 4px solid; border-image: linear-gradient(var(--orange), var(--magenta)) 1;
+  background: linear-gradient(90deg, #eceefc, rgba(236,238,252,0)); }
+.note { font-size: 11.5px; color: var(--muted); }
+
+/* ---------- tables ----------
+   tabular-nums = every digit is equally wide, so numbers line up in columns.
+   Row classes: .head = header, .fc = totals row, .hl = highlighted percentile, odd rows are tinted. */
+table { border-collapse: collapse; width: 100%; border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+th, td { padding: 4px 8px; text-align: left; vertical-align: middle; border-bottom: 1px solid #e5e8f5; }
+tr.head th { background: linear-gradient(180deg, #ffffff, #eceff9 48%, #d9ddf0 52%, #eef0fa); border-bottom: 1px solid var(--line2);
+  font: 600 13px/1.2 var(--cond); letter-spacing: .02em; color: var(--steel1); padding: 6px 8px; white-space: nowrap; }
+th.ctr { text-align: center !important; }
+tr:nth-child(odd) td { background: var(--tint); }
+td.num, th.num { text-align: right; white-space: nowrap; }
+tr.fc td { background: linear-gradient(180deg, #f7f7ff 0%, #e9eafc 48%, #dcdef7 52%, #ecedfc 100%); color: #2a2878;
+  font-size: 13.5px; font-weight: 700; letter-spacing: .02em; padding-top: 7px; padding-bottom: 7px;
+  border-top: 2px solid var(--violet); border-bottom: 0; text-shadow: 0 1px 0 rgba(255,255,255,.8); }
+tr.hl td { background: linear-gradient(#fff3e6, #fddcbc); color: #8a3e06; font-weight: 700; }
+/* model table: align cells to the bottom so Base/Mean line up with the inputs, not with the small labels above them */
+#modelTable tr.item td { vertical-align: bottom; }
+#modelTable td.val { padding-bottom: 7px; }
+#modelTable td.pc { text-align: center; }
+#modelTable input[type=text] { min-width: 240px; }
+#modelTable input[type=number] { width: 84px; }
+#scTable td.muted { min-width: 170px; }
+#scTable td:nth-child(2) { white-space: nowrap; }
+
+/* ---------- inputs & gel buttons ----------
+   Form fields and the glossy "gel" buttons. Browsers give form controls their own fonts,
+   so "font: inherit" makes them use the page font. */
+input, select, button { font: inherit; color: var(--ink); }
+input, select { font-size: 12px; padding: 3px 6px; border: 1px solid #a0a7cf; border-radius: 4px; background: #fff;
+  box-shadow: inset 1px 1px 2px rgba(30,20,90,.13), 0 1px 0 rgba(255,255,255,.9); }
+input::placeholder { color: #a0a5c4; font-style: italic; }
+/* the field being typed into gets a violet glow instead of the browser's default outline */
+input:focus, select:focus { outline: none; border-color: var(--violet); box-shadow: 0 0 0 3px rgba(140,125,240,.4), inset 1px 1px 2px rgba(0,0,0,.1); }
+input[type=number] { width: 84px; text-align: right; }
+input[type=text] { width: 100%; min-width: 150px; }
+input[type=radio], input[type=checkbox] { accent-color: var(--violet); box-shadow: none; }
+label { white-space: nowrap; }
+/* parameter label: small caption ("Min", "Max"…) stacked above its input */
+.pl { display: inline-flex; flex-direction: column; align-items: center; white-space: nowrap; font-size: 10px; line-height: 1.3; color: var(--muted); }
+/* default button = silver pill; :hover = mouse over it, :active = being pressed (moves down 1 px) */
+button { position: relative; overflow: hidden; cursor: pointer; padding: 4px 14px; font-size: 12px; font-weight: 700; color: var(--steel1);
+  border: 1px solid #9aa0c6; border-radius: 999px; background: var(--chrome);
+  box-shadow: inset 0 1px rgba(255,255,255,.95), inset 0 -3px 6px rgba(255,255,255,.6), 0 3px 5px -2px rgba(40,30,110,.35); }
+button:hover { border-color: var(--violet); box-shadow: inset 0 1px #fff, 0 0 9px rgba(130,120,240,.55); }
+button:active { transform: translateY(1px); box-shadow: inset 0 2px 4px rgba(0,0,0,.25); }
+/* same hover shine as the tabs, except on the small round ? and ✕ buttons */
+button:not(.help):not(.x)::after { content: ""; position: absolute; top: 0; left: -70%; width: 45%; height: 100%; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.85), transparent); transform: skewX(-20deg); transition: left .55s; }
+button:not(.help):not(.x):hover::after { left: 130%; }
+/* .primary = the main action (Run, Save) in orange gel */
+button.primary { color: #fff; border-color: #a24c08; text-shadow: 0 -1px rgba(0,0,0,.35); background: var(--gel-orange);
+  box-shadow: inset 0 1px rgba(255,255,255,.85), inset 0 -5px 9px rgba(255,215,150,.65), 0 5px 9px -3px rgba(200,100,20,.55); }
+button.primary:hover { border-color: #7f3b05; box-shadow: inset 0 1px #fff, inset 0 -5px 9px rgba(255,225,170,.8), 0 0 14px rgba(255,150,50,.8); }
+button:disabled { color: #a3a8c4; border-color: #cdd0e4; cursor: default; background: #f0f1f8; text-shadow: none; box-shadow: none; transform: none; }
+button:disabled::after { display: none; }
+/* delete cross (✕) = small glossy violet pearl */
+button.x { width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 10px; line-height: 18px; color: #fff; border-color: #2a2878;
+  background: radial-gradient(circle at 35% 26%, #ffffff 0, #d0d3ff 25%, #6a64d0 62%, #2a2878 100%); text-shadow: 0 -1px rgba(0,0,0,.45);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3), 0 0 6px rgba(150,140,255,.5); }
+button.x:hover { border-color: #5e1053; background: radial-gradient(circle at 35% 26%, #fff 0, #f8d2ee 25%, #c04ea6 62%, #6e1462 100%);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3), 0 0 9px rgba(201,95,174,.75); }
+/* round "?" help button; .on = its help window is open */
+button.help { width: 21px; height: 21px; padding: 0; border-radius: 50%; border: 1px solid #2a2878; color: #fff; font: 700 12px/19px var(--body);
+  text-shadow: 0 -1px rgba(0,0,0,.45); background: radial-gradient(circle at 35% 26%, #ffffff 0, #d0d3ff 25%, #6a64d0 62%, #2a2878 100%);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3), 0 0 6px rgba(150,140,255,.5); }
+button.help:hover, button.help.on { background: radial-gradient(circle at 35% 26%, #fff 0, #f8d2ee 25%, #c04ea6 62%, #6e1462 100%); border-color: #5e1053; }
+/* .row = a line of controls that wraps onto the next line when space runs out */
+.row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 12px; }
+.row.first { margin-top: 0; }
+/* section 3 is a 4-column grid: labels in a column, Seed exactly below Sampling, Run next to Seed */
+.simgrid { display: grid; grid-template-columns: auto auto auto auto; gap: 10px 10px; align-items: center; justify-content: start; }
+.simrun { grid-column: 3 / 5; display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+/* .pulse = the Run button sends out an orange ring while the results are out of date; @keyframes defines the animation */
+.pulse { animation: pulse 1.5s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,140,40,.8), inset 0 1px #fff; } 100% { box-shadow: 0 0 0 12px rgba(255,140,40,0), inset 0 1px #fff; } }
+
+/* ---------- hero (empty model) ----------
+   The two big "Example / Start from Scratch" buttons shown instead of the table when there are no items. */
+#hero { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; padding: 26px 16px; border-radius: 10px;
+  background: var(--streaks) 0 20px / 100% 40px no-repeat, linear-gradient(100deg, #f7fbff, #e8eefc 60%, #d8dcf6); border: 1px solid #d6daf0; }
+#hero button { min-width: 240px; padding: 10px 22px; border-radius: 999px; font: 700 15px/1 var(--cond); letter-spacing: .02em; }
+
+/* ---------- help window ----------
+   The small window that opens under a "?" button. .tb = title bar with the close button, .bd = body text.
+   position: absolute + z-index puts it above the page; the script sets left/top. */
+#pop { position: absolute; z-index: 30; width: 380px; max-width: calc(100vw - 24px); background: #fff; border: 1px solid #2a2878;
+  border-radius: 12px; box-shadow: 0 0 0 4px rgba(214,218,240,.85), 4px 10px 24px rgba(40,30,110,.4); overflow: hidden; }
+#pop .tb { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 6px 6px 12px; color: #fff;
+  background: linear-gradient(180deg, #9a9ff0 0%, #5a58c4 46%, #33318f 52%, #4a48b0 100%); font: 700 15px/1.2 var(--cond); letter-spacing: .02em; text-shadow: 0 -1px rgba(0,0,0,.4);
+  border-bottom: 2px solid #e08acb; }
+#pop .tb button { width: 22px; height: 22px; padding: 0; border-radius: 50%; font: 700 13px/20px var(--body); color: #fff; border-color: #7a3605;
+  background: radial-gradient(circle at 35% 28%, #ffe0bd 0, #ef8424 55%, #8a3e06 100%); }
+#pop .tb button::after { display: none; }
+#pop .bd { padding: 12px 14px 14px; font-size: 12px; line-height: 1.55; background: linear-gradient(#fff, #f3f4fd); }
+#pop .bd p { margin: 0 0 7px; } #pop .bd p:last-child { margin: 0; }
+#pop code { font-family: var(--mono); font-size: 12px; color: var(--steel1); background: #eceefc; padding: 0 3px; border-radius: 3px; }
+
+/* ---------- results: readouts + monitors ----------
+   .kpis = grid of key-number tiles (as many per row as fit, min 170 px each).
+   Inside a .kpi the label (.l) comes after the value (.v) in the HTML, but
+   column-reverse shows it on top. */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 14px 0 16px; }
+.kpis > .muted { grid-column: 1 / -1; }
+.kpi { display: flex; flex-direction: column-reverse; border-radius: 12px; overflow: hidden; border: 1px solid #a3a9d4;
+  background: linear-gradient(180deg, #ffffff 0%, #f3f4fb 48%, #e7e9f6 52%, #f6f7fd 100%); box-shadow: inset 0 1px #fff, 0 8px 12px -8px rgba(50,40,140,.4); }
+.kpi .l { font: 600 12px/1.25 var(--cond); letter-spacing: .02em; color: #3a3a86; padding: 5px 10px; border-bottom: 1px solid #d6daf0;
+  background: linear-gradient(100deg, #f8f9ff, #e7eafa); display: flex; justify-content: space-between; gap: 8px; }
+.kpi .l span { color: #a0a5c4; text-align: right; }
+/* gradient-filled digits: the gradient is painted as background, clipped to the text shape, and the text itself made transparent */
+.kpi .v { padding: 9px 10px 8px; font: 700 27px/1.1 var(--cond); letter-spacing: .01em; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: linear-gradient(180deg, #8a86d8 0%, #4a46b0 46%, #26246e 54%, #6a64c4 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 1px 0 #fff); }
+.screen { margin-top: 4px; }
+.screen:empty { display: none; }
+/* message boxes: .info (blue), .warn (orange), .err (red); the icon comes from ::before */
+.msg { position: relative; margin-top: 8px; padding: 7px 12px 7px 32px; border: 1px solid; border-radius: 10px; font-size: 12px; }
+.msg::before { position: absolute; left: 10px; top: 6px; font-weight: 700; }
+.msg.info { background: linear-gradient(#f7f8ff, #e2e5fb); border-color: #a9aee6; } .msg.info::before { content: "ⓘ"; color: var(--accent); }
+.msg.warn { background: linear-gradient(#fffaf0, #ffe4b5); border-color: #e7b766; } .msg.warn::before { content: "⚠"; color: #a86200; }
+.msg.err { background: linear-gradient(#fff5f5, #fbd6d6); border-color: #e3a0a0; color: var(--danger); } .msg.err::before { content: "✖"; }
+/* charts are SVG (vector drawings) that stretch to the full width of their box */
+svg { width: 100%; height: auto; display: block; }
+/* --fs is set by fitChartText(): chart text stays the same size as the numbers in the tables, however wide the chart is */
+svg text { font-size: var(--fs, 11px); fill: var(--ink); font-family: var(--body); font-variant-numeric: tabular-nums; }
+/* chart lines: .axis = axes and tick marks, .grid = dotted guide lines, .axlbl = axis titles */
+.axis { stroke: #8a8fb3; stroke-width: 1; } .axis.main { stroke: #4a4a8e; stroke-width: 1.6; } .grid { stroke: #dcdff3; stroke-width: 1; stroke-dasharray: 2 3; }
+.axlbl { font-family: var(--cond) !important; font-weight: 600; font-size: calc(var(--fs, 11px) * 1.2) !important; fill: var(--steel1) !important; letter-spacing: .02em; }
+/* chart legend, in the same font as the axis titles (.axlbl) */
+.legend { font: 600 15px/1.3 var(--cond); letter-spacing: .02em; color: var(--steel1); display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 4px; justify-content: center; }
+.legend b { color: var(--steel1); font-weight: 600; }
+.legend .base { color: var(--orange-d); font-weight: 600; }
+/* histogram legend: P50 sits exactly under the "Total cost" axis title. The plot area is off-centre
+   because the left margin is wider than the right one: (ml − mr) / W = 54 / 760 ≈ 7.1 % */
+#histo .legend { display: grid; grid-template-columns: 1fr auto 1fr; padding-left: 7.1%; }
+#histo .legend > :first-child { justify-self: end; text-align: right; }
+#histo .legend > :last-child { justify-self: start; }
+@media (max-width: 600px) { #histo .legend { display: flex; padding-left: 0; } }
+/* .sw = small colour swatch next to a scenario name */
+.sw { display: inline-block; width: 16px; height: 4px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+/* sensitivity chart: each row is a 4-column grid – name | bar | share | rank correlation.
+   Bar colours: orange = biggest driver, purple (.neg) = item moves against the total. */
+.sens-row { display: grid; grid-template-columns: minmax(140px, 270px) 1fr 84px 64px; gap: 10px; align-items: center; margin: 5px 0; }
+.sens-head { margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid #d6daf0; font: 600 13px/1.2 var(--cond); color: #3a3a86; }
+.sens-head .sens-val { font-weight: 600; }
+.sens-name { text-align: right; font-size: 12px; }
+.sens-bar { height: 17px; border-radius: 9px; background: var(--gel-indigo); box-shadow: inset 0 1px rgba(255,255,255,.7), 0 4px 5px -2px rgba(40,30,110,.4); }
+.sens-bar.top { background: var(--gel-orange); }
+.sens-bar.neg { background: var(--gel-magenta); }
+.sens-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.sens-rho { text-align: center; }
+.rho { display: inline-block; box-sizing: border-box; width: 72px; padding: 1px 4px; text-align: center; white-space: nowrap; border-radius: 10px; font: 700 12.5px/1.5 var(--body); font-variant-numeric: tabular-nums; color: var(--ink);
+  background: linear-gradient(180deg, #ffffff, #e9ebf7); border: 1px solid #bcc1e0; box-shadow: inset 0 1px #fff; }
+.rho.neg { color: var(--magenta); border-color: #e2bcd8; }
+@media (max-width: 600px) { .sens-row { grid-template-columns: 1fr 78px 60px; } .sens-name { grid-column: 1 / -1; text-align: left; } .sens-head > div:nth-child(2) { display: none; } }
+.muted { color: var(--muted); font-size: 11.5px; }
+/* results that no longer match the model (it was edited after the run) are faded out */
+.stale { opacity: .45; }
+
+/* ---------- status bar ----------
+   The footer: status LED + text, storage note, credits. */
+.statusbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; align-items: center; padding: 7px 16px;
+  background: var(--streaks) 0 4px / 100% 20px no-repeat, linear-gradient(100deg, #f6f9ff 0%, #e4e8f8 50%, #c9cdf0 100%); border-top: 1px solid #a3a9d4;
+  font-size: 11px; color: #3e4278; }
+.statusbar b { font: inherit; color: inherit; }
+.statusbar .help { vertical-align: middle; margin-left: 4px; width: 18px; height: 18px; font-size: 11px; line-height: 16px; }
+.led { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 7px; vertical-align: -1px;
+  background: radial-gradient(circle at 35% 30%, #eee, #9a9fbd); box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+.led.ok { background: radial-gradient(circle at 35% 30%, #e0ffe8, #22c24f); box-shadow: 0 0 7px #45e676; }
+.led.stale { background: radial-gradient(circle at 35% 30%, #fff0d6, #f08a1c); box-shadow: 0 0 7px #ffa64a; }
+</style>
+</head>
+<body>
+<!-- =====================================================================
+     PAGE STRUCTURE (HTML)
+     Elements with an id="…" are the ones the script talks to. Empty tables
+     and divs are placeholders – the script builds their content.
+     ===================================================================== -->
+<!-- outer device frame (.site) with corner screws, inner screen (.inner) -->
+<div class="site screws">
+<div class="inner">
+
+<!-- ---------- header: logo, decorative chart, tagline ---------- -->
+<header class="masthead">
+  <div class="brand">
+    <div class="logo">MC<span class="sl">//</span>COST RISK</div>
+    <div class="sub">Monte Carlo Cost Risk Analysis</div>
+  </div>
+  <!-- Pure decoration, a static drawing (aria-hidden = screen readers skip it):
+       histogram bars, two bell curves, a dashed cumulative curve, a P80 marker,
+       falling correlation numbers and a 5×5 correlation matrix.
+       The coordinates were generated, not hand-written – don't edit them one by one.
+       <defs> holds reusable gradients/filters that the shapes refer to as url(#id). -->
+  <svg class="motif" viewBox="0 0 440 128" aria-hidden="true">
+    <defs>
+      <linearGradient id="mBar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".75"/><stop offset=".5" stop-color="#b9bff0" stop-opacity=".45"/><stop offset="1" stop-color="#6a5fc8" stop-opacity=".12"/></linearGradient>
+      <linearGradient id="mBarHot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".9"/><stop offset=".5" stop-color="#8288e6" stop-opacity=".6"/><stop offset="1" stop-color="#3b3a9e" stop-opacity=".2"/></linearGradient>
+      <linearGradient id="mGloss" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <linearGradient id="mBellA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8d9be0" stop-opacity=".55"/><stop offset="1" stop-color="#8d9be0" stop-opacity="0"/></linearGradient>
+      <linearGradient id="mBellB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e08acb" stop-opacity=".5"/><stop offset="1" stop-color="#e08acb" stop-opacity="0"/></linearGradient>
+      <linearGradient id="mRain" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".7" stop-color="#fff" stop-opacity=".6"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <linearGradient id="mSheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".45"/><stop offset=".5" stop-color="#fff" stop-opacity=".08"/><stop offset=".52" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <filter id="mGlow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <g stroke="#ffffff" stroke-opacity=".14" stroke-width=".8">
+      <line x1="10" y1="0" x2="10" y2="128"/><line x1="30" y1="0" x2="30" y2="128"/><line x1="50" y1="0" x2="50" y2="128"/><line x1="70" y1="0" x2="70" y2="128"/><line x1="90" y1="0" x2="90" y2="128"/><line x1="110" y1="0" x2="110" y2="128"/><line x1="130" y1="0" x2="130" y2="128"/><line x1="150" y1="0" x2="150" y2="128"/><line x1="170" y1="0" x2="170" y2="128"/><line x1="190" y1="0" x2="190" y2="128"/><line x1="210" y1="0" x2="210" y2="128"/><line x1="230" y1="0" x2="230" y2="128"/><line x1="250" y1="0" x2="250" y2="128"/><line x1="270" y1="0" x2="270" y2="128"/><line x1="290" y1="0" x2="290" y2="128"/><line x1="310" y1="0" x2="310" y2="128"/><line x1="330" y1="0" x2="330" y2="128"/><line x1="350" y1="0" x2="350" y2="128"/><line x1="370" y1="0" x2="370" y2="128"/><line x1="390" y1="0" x2="390" y2="128"/><line x1="410" y1="0" x2="410" y2="128"/><line x1="430" y1="0" x2="430" y2="128"/>
+      <line x1="0" y1="6" x2="440" y2="6"/><line x1="0" y1="22" x2="440" y2="22"/><line x1="0" y1="38" x2="440" y2="38"/><line x1="0" y1="54" x2="440" y2="54"/><line x1="0" y1="70" x2="440" y2="70"/><line x1="0" y1="86" x2="440" y2="86"/><line x1="0" y1="102" x2="440" y2="102"/><line x1="0" y1="118" x2="440" y2="118"/>
+    </g>
+    <g>
+      <rect x="20" y="109.4" width="17" height="8.6" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="22" y="110.9" width="5" height="5.6" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="40" y="101.2" width="17" height="16.8" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="42" y="102.7" width="5" height="13.8" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="60" y="88.8" width="17" height="29.2" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="62" y="90.3" width="5" height="26.2" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="80" y="72.4" width="17" height="45.6" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="82" y="73.9" width="5" height="42.6" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="100" y="54.4" width="17" height="63.6" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="102" y="55.9" width="5" height="60.6" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="120" y="38.6" width="17" height="79.4" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="122" y="40.1" width="5" height="76.4" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="140" y="29.2" width="17" height="88.8" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="142" y="30.7" width="5" height="85.8" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="160" y="29.2" width="17" height="88.8" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="162" y="30.7" width="5" height="85.8" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="180" y="38.6" width="17" height="79.4" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="182" y="40.1" width="5" height="76.4" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="200" y="54.4" width="17" height="63.6" rx="2" fill="url(#mBarHot)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="202" y="55.9" width="5" height="60.6" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="220" y="72.4" width="17" height="45.6" rx="2" fill="url(#mBar)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="222" y="73.9" width="5" height="42.6" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="240" y="88.8" width="17" height="29.2" rx="2" fill="url(#mBar)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="242" y="90.3" width="5" height="26.2" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="260" y="101.2" width="17" height="16.8" rx="2" fill="url(#mBar)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="262" y="102.7" width="5" height="13.8" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="280" y="109.4" width="17" height="8.6" rx="2" fill="url(#mBar)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="282" y="110.9" width="5" height="5.6" rx="2" fill="url(#mGloss)" opacity=".7"/>
+      <rect x="300" y="114.0" width="17" height="4.0" rx="2" fill="url(#mBar)" stroke="#fff" stroke-opacity=".55" stroke-width=".6"/><rect x="302" y="115.5" width="5" height="1.0" rx="2" fill="url(#mGloss)" opacity=".7"/>
+    </g>
+    <path d="M0,115.2 L4,114.7 L8,114.0 L12,113.3 L16,112.5 L20,111.6 L24,110.5 L28,109.4 L32,108.0 L36,106.6 L40,104.9 L44,103.1 L48,101.1 L52,99.0 L56,96.6 L60,94.1 L64,91.4 L68,88.5 L72,85.5 L76,82.3 L80,78.9 L84,75.4 L88,71.9 L92,68.2 L96,64.5 L100,60.8 L104,57.1 L108,53.4 L112,49.9 L116,46.4 L120,43.1 L124,40.0 L128,37.2 L132,34.5 L136,32.2 L140,30.3 L144,28.6 L148,27.4 L152,26.5 L156,26.1 L160,26.0 L164,26.4 L168,27.1 L172,28.3 L176,29.8 L180,31.7 L184,33.9 L188,36.5 L192,39.3 L196,42.3 L200,45.6 L204,49.0 L208,52.5 L212,56.2 L216,59.9 L220,63.6 L224,67.3 L228,71.0 L232,74.6 L236,78.1 L240,81.4 L244,84.7 L248,87.8 L252,90.7 L256,93.4 L260,96.0 L264,98.4 L268,100.6 L272,102.6 L276,104.5 L280,106.2 L284,107.7 L288,109.0 L292,110.3 L296,111.3 L300,112.3 L304,113.1 L308,113.9 L312,114.5 L316,115.1 L320,115.5 L324,116.0 L328,116.3 L332,116.6 L336,116.8 L340,117.1 L340,118 L0,118 Z" fill="url(#mBellA)"/>
+    <path d="M0,117.2 L4,117.0 L8,116.9 L12,116.7 L16,116.5 L20,116.2 L24,115.9 L28,115.6 L32,115.2 L36,114.8 L40,114.4 L44,113.8 L48,113.2 L52,112.6 L56,111.9 L60,111.1 L64,110.2 L68,109.3 L72,108.3 L76,107.1 L80,105.9 L84,104.6 L88,103.2 L92,101.7 L96,100.1 L100,98.5 L104,96.7 L108,94.8 L112,92.8 L116,90.8 L120,88.7 L124,86.5 L128,84.3 L132,82.0 L136,79.7 L140,77.3 L144,75.0 L148,72.6 L152,70.3 L156,68.0 L160,65.7 L164,63.5 L168,61.4 L172,59.4 L176,57.6 L180,55.8 L184,54.2 L188,52.8 L192,51.5 L196,50.4 L200,49.5 L204,48.8 L208,48.3 L212,48.1 L216,48.0 L220,48.2 L224,48.5 L228,49.1 L232,49.9 L236,50.9 L240,52.1 L244,53.5 L248,55.0 L252,56.7 L256,58.5 L260,60.4 L264,62.5 L268,64.6 L272,66.8 L276,69.1 L280,71.4 L284,73.8 L288,76.1 L292,78.5 L296,80.8 L300,83.1 L304,85.4 L308,87.6 L312,89.8 L316,91.8 L320,93.8 L324,95.7 L328,97.6 L332,99.3 L336,100.9 L340,102.5 L344,103.9 L348,105.3 L352,106.5 L356,107.7 L360,108.8 L364,109.8 L368,110.7 L372,111.5 L376,112.3 L380,112.9 L384,113.5 L388,114.1 L392,114.6 L396,115.0 L400,115.4 L404,115.8 L408,116.1 L412,116.3 L416,116.6 L420,116.8 L424,117.0 L428,117.1 L430,118 L0,118 Z" fill="url(#mBellB)"/>
+    <path d="M0,117.2 L4,117.0 L8,116.9 L12,116.7 L16,116.5 L20,116.2 L24,115.9 L28,115.6 L32,115.2 L36,114.8 L40,114.4 L44,113.8 L48,113.2 L52,112.6 L56,111.9 L60,111.1 L64,110.2 L68,109.3 L72,108.3 L76,107.1 L80,105.9 L84,104.6 L88,103.2 L92,101.7 L96,100.1 L100,98.5 L104,96.7 L108,94.8 L112,92.8 L116,90.8 L120,88.7 L124,86.5 L128,84.3 L132,82.0 L136,79.7 L140,77.3 L144,75.0 L148,72.6 L152,70.3 L156,68.0 L160,65.7 L164,63.5 L168,61.4 L172,59.4 L176,57.6 L180,55.8 L184,54.2 L188,52.8 L192,51.5 L196,50.4 L200,49.5 L204,48.8 L208,48.3 L212,48.1 L216,48.0 L220,48.2 L224,48.5 L228,49.1 L232,49.9 L236,50.9 L240,52.1 L244,53.5 L248,55.0 L252,56.7 L256,58.5 L260,60.4 L264,62.5 L268,64.6 L272,66.8 L276,69.1 L280,71.4 L284,73.8 L288,76.1 L292,78.5 L296,80.8 L300,83.1 L304,85.4 L308,87.6 L312,89.8 L316,91.8 L320,93.8 L324,95.7 L328,97.6 L332,99.3 L336,100.9 L340,102.5 L344,103.9 L348,105.3 L352,106.5 L356,107.7 L360,108.8 L364,109.8 L368,110.7 L372,111.5 L376,112.3 L380,112.9 L384,113.5 L388,114.1 L392,114.6 L396,115.0 L400,115.4 L404,115.8 L408,116.1 L412,116.3 L416,116.6 L420,116.8 L424,117.0 L428,117.1" fill="none" stroke="#f7c4ea" stroke-width="1.4" stroke-opacity=".9" filter="url(#mGlow)"/>
+    <path d="M0,115.2 L4,114.7 L8,114.0 L12,113.3 L16,112.5 L20,111.6 L24,110.5 L28,109.4 L32,108.0 L36,106.6 L40,104.9 L44,103.1 L48,101.1 L52,99.0 L56,96.6 L60,94.1 L64,91.4 L68,88.5 L72,85.5 L76,82.3 L80,78.9 L84,75.4 L88,71.9 L92,68.2 L96,64.5 L100,60.8 L104,57.1 L108,53.4 L112,49.9 L116,46.4 L120,43.1 L124,40.0 L128,37.2 L132,34.5 L136,32.2 L140,30.3 L144,28.6 L148,27.4 L152,26.5 L156,26.1 L160,26.0 L164,26.4 L168,27.1 L172,28.3 L176,29.8 L180,31.7 L184,33.9 L188,36.5 L192,39.3 L196,42.3 L200,45.6 L204,49.0 L208,52.5 L212,56.2 L216,59.9 L220,63.6 L224,67.3 L228,71.0 L232,74.6 L236,78.1 L240,81.4 L244,84.7 L248,87.8 L252,90.7 L256,93.4 L260,96.0 L264,98.4 L268,100.6 L272,102.6 L276,104.5 L280,106.2 L284,107.7 L288,109.0 L292,110.3 L296,111.3 L300,112.3 L304,113.1 L308,113.9 L312,114.5 L316,115.1 L320,115.5 L324,116.0 L328,116.3 L332,116.6 L336,116.8 L340,117.1" fill="none" stroke="#ffffff" stroke-width="1.8" filter="url(#mGlow)"/>
+    <path d="M0,117.6 L4,117.5 L8,117.4 L12,117.2 L16,117.1 L20,116.9 L24,116.7 L28,116.5 L32,116.2 L36,115.9 L40,115.5 L44,115.1 L48,114.6 L52,114.1 L56,113.4 L60,112.8 L64,112.0 L68,111.2 L72,110.2 L76,109.2 L80,108.1 L84,106.9 L88,105.5 L92,104.1 L96,102.5 L100,100.9 L104,99.1 L108,97.2 L112,95.2 L116,93.1 L120,90.9 L124,88.6 L128,86.2 L132,83.7 L136,81.2 L140,78.6 L144,75.9 L148,73.2 L152,70.5 L156,67.7 L160,65.0 L164,62.2 L168,59.5 L172,56.7 L176,54.1 L180,51.4 L184,48.9 L188,46.4 L192,44.0 L196,41.7 L200,39.4 L204,37.3 L208,35.3 L212,33.4 L216,31.6 L220,29.9 L224,28.3 L228,26.8 L232,25.5 L236,24.2 L240,23.1 L244,22.0 L248,21.1 L252,20.2 L256,19.4 L260,18.7 L264,18.1 L268,17.5 L272,17.0 L276,16.6 L280,16.2 L284,15.9 L288,15.6 L292,15.4 L296,15.1 L300,15.0 L304,14.8 L308,14.7 L312,14.5 L316,14.5 L320,14.4 L324,14.3 L328,14.2 L332,14.2 L336,14.2 L340,14.1 L344,14.1 L348,14.1 L352,14.1 L356,14.1 L360,14.0 L364,14.0 L368,14.0 L372,14.0 L376,14.0 L380,14.0" fill="none" stroke="#7fe8ff" stroke-width="1.4" stroke-dasharray="4 3" opacity=".95" filter="url(#mGlow)"/>
+    <line x1="209.0" y1="8" x2="209.0" y2="118" stroke="#ffb066" stroke-width="2" filter="url(#mGlow)"/>
+    <circle cx="209.0" cy="34.8" r="3" fill="#fff" stroke="#ff9a3c" stroke-width="1.4" filter="url(#mGlow)"/>
+    <text x="214.0" y="49" class="p80">P80</text>
+    <g>
+      <rect x="30" y="0" width="1.2" height="70" fill="url(#mRain)"/>
+      <text x="33" y="66" class="rain">0.8</text>
+      <rect x="90" y="10" width="1.2" height="90" fill="url(#mRain)"/>
+      <text x="93" y="96" class="rain">0.8</text>
+      <rect x="150" y="0" width="1.2" height="50" fill="url(#mRain)"/>
+      <text x="153" y="46" class="rain">-0.4</text>
+      <rect x="250" y="6" width="1.2" height="80" fill="url(#mRain)"/>
+      <text x="253" y="82" class="rain">0.6</text>
+      <rect x="310" y="0" width="1.2" height="110" fill="url(#mRain)"/>
+      <text x="313" y="106" class="rain">1.0</text>
+      <rect x="370" y="20" width="1.2" height="90" fill="url(#mRain)"/>
+      <text x="373" y="106" class="rain">-0.4</text>
+      <rect x="410" y="0" width="1.2" height="60" fill="url(#mRain)"/>
+      <text x="413" y="56" class="rain">1.0</text>
+    </g>
+    <g transform="translate(262 22)">
+      <path d="M-4 -8h-3v86h3M98 -8h3v86h-3" fill="none" stroke="#fff" stroke-opacity=".75" stroke-width="1.2"/>
+      <text x="0" y="0" class="mx d">1.0</text>
+      <text x="20" y="0" class="mx">.6</text>
+      <text x="40" y="0" class="mx">.3</text>
+      <text x="60" y="0" class="mx">-.2</text>
+      <text x="80" y="0" class="mx">.1</text>
+      <text x="0" y="17" class="mx">.6</text>
+      <text x="20" y="17" class="mx d">1.0</text>
+      <text x="40" y="17" class="mx">.4</text>
+      <text x="60" y="17" class="mx">.0</text>
+      <text x="80" y="17" class="mx">.2</text>
+      <text x="0" y="34" class="mx">.3</text>
+      <text x="20" y="34" class="mx">.4</text>
+      <text x="40" y="34" class="mx d">1.0</text>
+      <text x="60" y="34" class="mx">.5</text>
+      <text x="80" y="34" class="mx">-.1</text>
+      <text x="0" y="51" class="mx">-.2</text>
+      <text x="20" y="51" class="mx">.0</text>
+      <text x="40" y="51" class="mx">.5</text>
+      <text x="60" y="51" class="mx d">1.0</text>
+      <text x="80" y="51" class="mx">.3</text>
+      <text x="0" y="68" class="mx">.1</text>
+      <text x="20" y="68" class="mx">.2</text>
+      <text x="40" y="68" class="mx">-.1</text>
+      <text x="60" y="68" class="mx">.3</text>
+      <text x="80" y="68" class="mx d">1.0</text>
+    </g>
+  </svg>
+  <div class="tagline"><b>Know your P80.</b><span>Cost Items · Risk Events · Correlations · Contingency</span></div>
+</header>
+
+<!-- ---------- sticky toolbar ----------
+     Tabs: data-go = id of the section to scroll to (handled by the navigation code in the script).
+     <i class="tled"> = the status LED, <small> = step number. -->
+<div class="cmdbar">
+  <nav class="tabs" id="tabs">
+    <a data-go="sec-model"><i class="tled"></i><small>1</small>Model</a>
+    <a data-go="sec-corr"><i class="tled"></i><small>2</small>Correlations</a>
+    <a data-go="sec-run"><i class="tled"></i><small>3</small>Simulate</a>
+    <a data-go="resultsCard"><i class="tled"></i><small>4</small>Results</a>
+    <a data-go="sensCard"><i class="tled"></i><small>5</small>Sensitivity</a>
+    <a data-go="sec-scen"><i class="tled"></i><small>6</small>Scenarios</a>
+  </nav>
+  <!-- main buttons; "title" = tooltip shown on mouse hover -->
+  <div class="cmds">
+    <button id="loadExample" title="Fill in a nuclear power plant cost model that uses every feature">Load Example</button>
+    <button id="newBlank" title="Clear the model and all scenarios">New Blank</button>
+    <button class="primary" id="runTop" title="Run the simulation">▶ Run</button>
+  </div>
+</div>
+
+<main class="content">
+<!-- Every panel has the same shape: header (.ph) with title + "?" button, body (.pb).
+     data-help="key" on a "?" button picks the text from the HELP object in the script. -->
+
+<!-- ---------- 1) Model: cost items and their distributions ---------- -->
+<section class="panel" id="sec-model">
+  <div class="ph"><div class="pt"><span class="pn">1</span><h2>Model &amp; Assumptions</h2></div><button class="help" data-help="model">?</button></div>
+  <div class="pb">
+    <!-- start screen, visible only while the model is empty ("hidden" is toggled by renderModel()) -->
+    <div id="hero" hidden>
+      <button class="primary" id="heroExample">▶ Example: Nuclear Power Plant</button>
+      <button id="heroScratch">+ Start from Scratch</button>
+    </div>
+    <div id="modelWrap">
+      <!-- rows are built by renderModel() -->
+      <div class="scroll"><table id="modelTable"></table></div>
+      <div class="row">
+        <button id="addRow">+ Add Item</button>
+        <label>Units <input type="text" id="fcUnits" placeholder="e.g. mil. €" style="width:110px;min-width:0"></label>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- panels 2 and 3 side by side -->
+<div class="grid2">
+  <!-- ---------- 2) Correlations: pairs of items that tend to move together ---------- -->
+  <section class="panel" id="sec-corr">
+    <div class="ph"><div class="pt"><span class="pn">2</span><h2>Correlations</h2></div><button class="help" data-help="corr">?</button></div>
+    <div class="pb">
+      <!-- rows are built by renderCorr() -->
+      <div class="scroll"><table id="corrTable"></table></div>
+      <div class="row"><button id="addCorr">+ Add Correlation</button></div>
+      <div id="corrMsg"></div>
+    </div>
+  </section>
+  <!-- ---------- 3) Simulate: run settings; values are loaded by initInputs() ---------- -->
+  <section class="panel" id="sec-run">
+    <div class="ph"><div class="pt"><span class="pn">3</span><h2>Simulate</h2></div><button class="help" data-help="run">?</button></div>
+    <div class="pb">
+      <div class="simgrid">
+        <label for="sampling">Sampling</label>
+        <select id="sampling"><option value="lhs">Latin Hypercube</option><option value="mc">Monte Carlo</option></select>
+        <label for="seed">Seed</label>
+        <input type="number" id="seed" step="1" style="width:70px">
+        <label for="trials">Trials</label>
+        <input type="number" id="trials" min="100" step="1000" style="width:100%">
+        <div class="simrun"><button class="primary" id="run">▶ Run Simulation</button><span id="runInfo" class="muted"></span></div>
+      </div>
+      <!-- errors and warnings from the last run -->
+      <div id="runMsg"></div>
+    </div>
+  </section>
+</div>
+
+<!-- ---------- 4) Results: key numbers, histogram, statistics; filled by renderResults() ---------- -->
+<section class="panel" id="resultsCard">
+  <div class="ph"><div class="pt"><span class="pn">4</span><h2>Results <span class="sub" id="resTitle"></span></h2></div><button class="help" data-help="results">?</button></div>
+  <div class="pb">
+    <div class="row first">
+      <label>Confidence Level <input type="number" id="level" min="1" max="99" step="1" style="width:60px"> %</label>
+      <label>Probability That Total ≤ <input type="number" step="any" id="certX"> <span id="certIsBase" class="muted" hidden>(Base)</span></label>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div id="histo" class="screen"></div>
+    <div class="grid2 even" id="tables" style="margin-top:18px">
+      <div><table id="statsTable"></table></div>
+      <div><table id="pctTable"></table></div>
+    </div>
+    <div class="row"><button id="exportCsv">⇩ Export All Trials (CSV)</button></div>
+  </div>
+</section>
+
+<!-- ---------- 5) Sensitivity: which items drive the risk; filled by renderResults() ---------- -->
+<section class="panel" id="sensCard">
+  <div class="ph"><div class="pt"><span class="pn">5</span><h2>Sensitivity</h2></div><button class="help" data-help="sens">?</button></div>
+  <div class="pb"><div id="sens"></div></div>
+</section>
+
+<!-- ---------- 6) Scenarios: saved runs compared side by side; filled by renderScenarios() ---------- -->
+<section class="panel" id="sec-scen">
+  <div class="ph"><div class="pt"><span class="pn">6</span><h2>Scenarios</h2></div><button class="help" data-help="sc">?</button></div>
+  <div class="pb">
+    <div class="row first">
+      <input type="text" id="scName" placeholder="Scenario name, e.g. Base" style="width:240px">
+      <button id="saveSc" class="primary">Save Current Run</button>
+      <!-- radio buttons with the same name = only one can be selected (chart type) -->
+      <label><input type="radio" name="ovMode" value="freq" checked> Frequency</label>
+      <label><input type="radio" name="ovMode" value="cum"> Cumulative</label>
+    </div>
+    <div id="scMsg"></div>
+    <div class="scroll"><table id="scTable" style="margin-top:12px"></table></div>
+    <div id="overlay" class="screen" style="margin-top:14px"></div>
+  </div>
+</section>
+</main>
+
+<!-- ---------- status bar; LED and text are set by renderStatus() ---------- -->
+<footer class="statusbar">
+  <span><span class="led" id="led"></span><span id="statusTxt">No run yet</span></span>
+  <span>Data stays in this browser<button class="help" data-help="storage">?</button></span>
+  <span><b>MC//Cost Risk</b> &nbsp;·&nbsp; © 2026 by Frantis3k</span>
+</footer>
+</div>
+</div>
+
+<!-- the one shared help window; it sits outside the frame so it can float over anything -->
+<div id="pop" hidden></div>
+
+<script>
+/* =====================================================================
+   SCRIPT (JavaScript)
+   Runs once when the page loads (see START at the bottom), then reacts
+   to clicks and typing through "event listeners".
+   ===================================================================== */
+
+// strict mode: the browser reports common mistakes (e.g. a typo creating a new variable) as errors instead of ignoring them
+'use strict';
+
+/* =====================================================================
+   1) DISTRIBUTIONS
+   How a random value is drawn: inverse-CDF sampling. Take a uniform
+   random number u between 0 and 1 and ask "which value has a u share of
+   outcomes below it?". Do this many times and the values follow the
+   chosen distribution.
+
+   Each distribution has:
+     label   - name shown in the drop-down menu
+     params  - parameter names (max 3, the table has 3 columns)
+     likely  - value used in the base (deterministic) estimate
+     mean    - theoretical mean (shown in the table for comparison)
+     check   - returns an error text, or null if the parameters are OK
+     inv     - inverse CDF: u from (0,1) -> value
+   To add a new distribution, add one entry here – the menu, table and
+   simulation pick it up automatically.
+   ===================================================================== */
+const DISTRIBUTIONS = {
+  // three-point estimate; straight-line slopes, so the extremes get relatively much weight
+  triangular: {
+    label: 'Triangular', params: ['Min', 'Likeliest', 'Max'],
+    likely: p => p[1], mean: p => (p[0] + p[1] + p[2]) / 3,
+    check: ([a, m, b]) => (a <= m && m <= b) ? null : 'must satisfy Min ≤ Likeliest ≤ Max',
+    inv: (u, [a, m, b]) => {
+      if (b <= a) return a;                      // Min = Max: no uncertainty
+      const f = (m - a) / (b - a);               // share of outcomes left of the likeliest value; closed-form inverse on each side
+      return u < f ? a + Math.sqrt(u * (b - a) * (m - a)) : b - Math.sqrt((1 - u) * (b - a) * (b - m));
+    }
+  },
+  // same three points, but a smooth curve concentrated around the likeliest value (less weight in the tails);
+  // it is a Beta distribution stretched from 0–1 to Min–Max
+  betapert: {
+    label: 'BetaPERT', params: ['Min', 'Likeliest', 'Max'],
+    likely: p => p[1], mean: p => (p[0] + 4 * p[1] + p[2]) / 6,
+    check: ([a, m, b]) => (a <= m && m <= b) ? null : 'must satisfy Min ≤ Likeliest ≤ Max',
+    inv: (u, [a, m, b]) => {
+      if (b <= a) return a;
+      return a + (b - a) * betaInv(u, 1 + 4 * (m - a) / (b - a), 1 + 4 * (b - m) / (b - a));
+    }
+  },
+  // symmetric bell curve
+  normal: {
+    label: 'Normal', params: ['Mean', 'Std. Dev.'],
+    likely: p => p[0], mean: p => p[0],
+    check: ([m, s]) => s >= 0 ? null : 'std. dev. must be ≥ 0',
+    inv: (u, [m, s]) => m + s * normInv(u)
+  },
+  // never negative, long tail to the right – good for costs that can blow up
+  lognormal: {
+    label: 'Lognormal', params: ['Mean', 'Std. Dev.'],
+    likely: p => p[0], mean: p => p[0],
+    check: ([m, s]) => (m > 0 && s >= 0) ? null : 'mean must be > 0 and std. dev. ≥ 0',
+    inv: (u, [m, s]) => {
+      // the user enters the mean/std. dev. of the cost itself; convert them to the parameters of the underlying normal (of log(cost))
+      const s2 = Math.log(1 + (s * s) / (m * m));
+      return Math.exp(Math.log(m) - s2 / 2 + Math.sqrt(s2) * normInv(u));
+    }
+  },
+  // every value between Min and Max equally likely – when you only know the range
+  uniform: {
+    label: 'Uniform', params: ['Min', 'Max'],
+    likely: p => (p[0] + p[1]) / 2, mean: p => (p[0] + p[1]) / 2,
+    check: ([a, b]) => a <= b ? null : 'must satisfy Min ≤ Max',
+    inv: (u, [a, b]) => a + u * (b - a)
+  },
+  // risk event: happens with probability p and then costs Impact, otherwise 0.
+  // Base = 0 because a deterministic estimate assumes the risk does not happen.
+  yesno: {
+    label: 'Yes-No × Impact', params: ['Prob. (0–1)', 'Impact'],
+    likely: () => 0, mean: p => p[0] * p[1],
+    check: ([p]) => (p >= 0 && p <= 1) ? null : 'enter probability as 0–1 (25% = 0.25)',
+    inv: (u, [p, impact]) => u > 1 - p ? impact : 0   // top p share of u values = "event happened"
+  },
+  // no uncertainty, e.g. a signed contract price
+  fixed: {
+    label: 'Fixed Value', params: ['Value'],
+    likely: p => p[0], mean: p => p[0],
+    check: () => null,
+    inv: (u, [v]) => v
+  },
+};
+
+/* =====================================================================
+   2) FORECAST
+   Forecast = the sum of all items. For a different formula, edit this
+   function (v = array of item values in table order, v[0] = first row).
+   The base estimate is computed by the same function from the "likely"
+   values, so the two always stay consistent.
+   ===================================================================== */
+function FORECAST(v) {
+  let s = 0;
+  for (const x of v) s += x;
+  return s;
+}
+
+/* =====================================================================
+   3) EMPTY MODEL AND EXAMPLE MODEL (nuclear power plant)
+   A model is a plain object:
+     rows  - cost items { id, name, dist (key in DISTRIBUTIONS), params }
+     corrs - correlations { a, b (row ids), rho (−1…1) }
+     prefs - run settings; certX = budget for "Probability that total ≤ x"
+             (null = use the base estimate)
+   Rows are referenced by id, not position, so correlations survive
+   deleting or reordering rows.
+   ===================================================================== */
+const DEFAULT_PREFS = { trials: 10000, sampling: 'lhs', seed: 123, level: 80, certX: null };
+const TOTAL_NAME = 'Total cost';
+
+const EMPTY_MODEL = { forecastName: TOTAL_NAME, units: '', rows: [], corrs: [], prefs: DEFAULT_PREFS };
+
+const EXAMPLE_MODEL = {
+  forecastName: TOTAL_NAME,
+  units: 'mil. €',
+  rows: [
+    { id: 1, name: 'Nuclear island (reactor, primary circuit)', dist: 'betapert',   params: [2400, 2600, 3300] },
+    { id: 2, name: 'Turbine island',                            dist: 'triangular', params: [900, 950, 1150] },
+    { id: 3, name: 'Civil works & structures',                  dist: 'triangular', params: [1300, 1400, 1800] },
+    { id: 4, name: 'Electrical & I&C',                          dist: 'normal',     params: [600, 45] },
+    { id: 5, name: "Owner's costs & licensing",                 dist: 'uniform',    params: [280, 340] },
+    { id: 6, name: 'First-of-a-kind engineering',               dist: 'lognormal',  params: [300, 90] },
+    { id: 7, name: 'Site & infrastructure (contracted)',        dist: 'fixed',      params: [150] },
+    { id: 8, name: 'Risk event: regulatory re-review delay',    dist: 'yesno',      params: [0.30, 400] },
+    { id: 9, name: 'Risk event: component re-manufacture',      dist: 'yesno',     params: [0.10, 250] },
+  ],
+  corrs: [
+    { a: 1, b: 3, rho: 0.6 },
+    { a: 3, b: 4, rho: 0.4 },
+    { a: 1, b: 6, rho: 0.5 },
+  ],
+  prefs: { ...DEFAULT_PREFS, certX: 6500 },
+};
+
+/* =====================================================================
+   HELP TEXTS (the "?" buttons)
+   Key = the button's data-help attribute. Value = HTML; the <h5> becomes
+   the window title. Backtick strings (`…`) may span several lines.
+   ===================================================================== */
+const HELP = {
+  storage: `<h5>Data Storage</h5>
+    <p>Everything is kept only in <i>this browser</i>, in its <code>localStorage</code>, under two keys:</p>
+    <p>• <code>mcCostRisk.model.v1</code> - items, distributions, correlations, settings;<br>
+       • <code>mcCostRisk.scenarios.v1</code> - saved scenarios (sorted trial totals, rounded to 0.001).</p>
+    <p>It is saved automatically after every change. Nothing is uploaded anywhere. The data is tied to this browser and to this file's location; another browser, computer or a moved file starts blank.</p>
+    <p><b>New Blank</b> deletes both keys; clearing the browser's site data does the same.</p>`,
+  model: `<h5>Model and Assumptions</h5>
+    <p>List the cost items of the estimate and describe the uncertainty of each by a distribution. The total is the sum of all items. <i>Base</i> is the value used in the deterministic estimate (the likeliest value), <i>Mean</i> is the expected value of the distribution.</p>
+    <p>Use <i>Yes-No × Impact</i> for discrete risk events and <i>Fixed Value</i> for contracted amounts.</p>
+    <p><i>Example:</i> structural concrete, Triangular 110 / 120 / 145 - most likely 120, at worst 145.</p>`,
+  corr: `<h5>Correlations</h5>
+    <p>Items that tend to overrun together should be correlated; otherwise the spread of the total is underestimated. The coefficient is a rank (Spearman) correlation from −1 to 1. <i>Achieved</i> shows the value obtained in the last run.</p>
+    <p><i>Example:</i> if civil works overrun, the nuclear island probably does too (same labour market, same schedule) → 0.6.</p>`,
+  run: `<h5>Simulation Settings</h5>
+    <p><i>Trials</i>: number of random samples of the whole model; 10 000 is usually enough. <i>Latin Hypercube</i> spreads the samples evenly and converges faster than plain <i>Monte Carlo</i>. The <i>seed</i> makes runs reproducible - same seed, same result.</p>
+    <p><i>Example:</i> 10 000 trials, Latin Hypercube, seed 123.</p>`,
+  results: `<h5>Results</h5>
+    <p>Distribution of the total over all trials. <i>P80</i> is the value not exceeded in 80 % of trials (set by the confidence level). <i>Contingency</i> = P80 − base estimate. The probability field shows how likely the total stays within a given budget (default: the base).</p>
+    <p><i>Example:</i> base 6 000, P80 6 600 → contingency 600 (10 % of base).</p>`,
+  sens: `<h5>Sensitivity</h5>
+    <p>How much each item contributes to the variance of the total. Share = squared rank (Spearman) correlation of the item with the total, normalized to 100 %; ρ is the rank correlation itself. Negative shares (purple) mean the item moves against the total.</p>
+    <p><i>Example:</i> nuclear island 55 % → narrowing its estimate reduces the risk most.</p>`,
+  sc: `<h5>Scenarios</h5>
+    <p>Save runs under a name and compare their statistics and distributions in one chart (frequency or cumulative). Δ is measured against the first scenario.</p>
+    <p><i>Example:</i> "Independent items" vs. "With correlations" - the correlated total is wider and its P80 higher.</p>`,
+};
+
+/* =====================================================================
+   MATHS
+   Small numeric building blocks used by the simulation.
+   ===================================================================== */
+
+// Seeded random number generator (Mulberry32): returns a function that gives numbers in [0, 1).
+// Why not Math.random()? It can't be seeded, so the same model would give slightly
+// different results every run. With a seed, same seed = same numbers = same result.
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// Randomly reorders an array in place (Fisher–Yates: every order is equally likely).
+function shuffle(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+
+// Inverse CDF of the standard normal N(0,1): probability p -> z-score.
+// There is no exact formula, so this uses Acklam's rational approximation
+// (error ~1e-9): one formula for the middle, another for each tail.
+function normInv(p) {
+  const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+  const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+  const pl = 0.02425;
+  if (p < pl) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p > 1 - pl) {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  const q = p - 0.5, r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+
+// Inverse CDF of Beta(al, be) via a precomputed table (for BetaPERT, where al, be >= 1).
+// How: add up the density on 4000 small steps to get the cumulative curve, then find u
+// in it by binary search and interpolate. The table is cached per parameter pair, so
+// it's built once per item, not once per trial.
+const betaCache = new Map();
+function betaInv(u, al, be) {
+  const key = al.toFixed(6) + '|' + be.toFixed(6);
+  let cdf = betaCache.get(key);
+  if (!cdf) {
+    const N = 4000;
+    cdf = new Float64Array(N + 1);
+    for (let i = 1; i <= N; i++) {
+      const x = (i - 0.5) / N;
+      cdf[i] = cdf[i - 1] + Math.pow(x, al - 1) * Math.pow(1 - x, be - 1);
+    }
+    const tot = cdf[N];
+    for (let i = 1; i <= N; i++) cdf[i] /= tot;
+    betaCache.set(key, cdf);
+  }
+  const N = cdf.length - 1;
+  let lo = 0, hi = N;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cdf[mid] <= u) lo = mid; else hi = mid; }
+  const f = (u - cdf[lo]) / ((cdf[hi] - cdf[lo]) || 1);
+  return (lo + f) / N;
+}
+
+// Cholesky decomposition: finds a lower-triangular L with L·Lᵀ = A.
+// Returns null if A is not a valid correlation matrix (not positive definite) –
+// buildCorrMatrix() uses that as a validity test.
+function cholesky(A) {
+  const n = A.length, L = A.map(r => r.map(() => 0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      let s = A[i][j];
+      for (let k = 0; k < j; k++) s -= L[i][k] * L[j][k];
+      if (i === j) { if (s <= 1e-10) return null; L[i][i] = Math.sqrt(s); }
+      else L[i][j] = s / L[j][j];
+    }
+  }
+  return L;
+}
+
+// Inverse of a lower-triangular matrix (simple forward substitution).
+function invLower(L) {
+  const n = L.length, I = L.map(r => r.map(() => 0));
+  for (let i = 0; i < n; i++) {
+    I[i][i] = 1 / L[i][i];
+    for (let j = 0; j < i; j++) {
+      let s = 0;
+      for (let k = j; k < i; k++) s += L[i][k] * I[k][j];
+      I[i][j] = -s / L[i][i];
+    }
+  }
+  return I;
+}
+
+// Pearson correlation of two equally long arrays (−1…1; 0 if either one is constant).
+function pearson(x, y) {
+  const n = x.length;
+  let mx = 0, my = 0;
+  for (let i = 0; i < n; i++) { mx += x[i]; my += y[i]; }
+  mx /= n; my /= n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = x[i] - mx, dy = y[i] - my;
+    sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+  }
+  return (sxx > 0 && syy > 0) ? sxy / Math.sqrt(sxx * syy) : 0;
+}
+
+// Ranks of the values (1 = smallest). Equal values share their average rank – important
+// for Yes-No items, where most trials are exactly 0.
+// Spearman (rank) correlation = pearson(ranks(x), ranks(y)).
+function ranks(arr) {
+  const n = arr.length;
+  const idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => arr[a] - arr[b]);
+  const r = new Float64Array(n);
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j + 1 < n && arr[idx[j + 1]] === arr[idx[i]]) j++;
+    const avg = (i + j) / 2 + 1;
+    for (let k = i; k <= j; k++) r[idx[k]] = avg;
+    i = j + 1;
+  }
+  return r;
+}
+
+// Iman-Conover: reorders the samples so the columns get the requested rank correlation;
+// each column keeps its own distribution.
+// Why reorder instead of generating correlated values? It doesn't change any single item's
+// values (so its distribution stays exact) and works for any mix of distributions.
+// How:
+//   1. make a helper column of normal scores for each item, randomly shuffled;
+//   2. transform the helper columns so their correlation becomes C
+//      (remove their accidental correlation with F⁻¹, apply the target with L);
+//   3. sort each item's real values into the same rank order as its helper column.
+function imanConover(cols, C, rng) {
+  const k = cols.length, n = cols[0].length;
+  const scores = new Float64Array(n);
+  for (let i = 0; i < n; i++) scores[i] = normInv((i + 1) / (n + 1));
+  const R = cols.map(() => shuffle(Float64Array.from(scores), rng));
+  const E = R.map(a => R.map(b => pearson(a, b)));           // accidental correlation of the shuffled scores
+  const F = cholesky(E), L = cholesky(C);
+  if (!F || !L) return;
+  const Fi = invLower(F);
+  const M = L.map((row, i) => Fi[0].map((_, j) => row.reduce((s, _, l) => s + L[i][l] * Fi[l][j], 0)));   // M = L · F⁻¹
+  for (let j = 0; j < k; j++) {
+    const target = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      for (let l = 0; l < k; l++) s += M[j][l] * R[l][i];
+      target[i] = s;
+    }
+    // the trial with the smallest target value gets the item's smallest value, and so on
+    const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => target[a] - target[b]);
+    const sortedX = Float64Array.from(cols[j]).sort();
+    for (let r = 0; r < n; r++) cols[j][order[r]] = sortedX[r];
+  }
+}
+
+// Builds the full item × item correlation matrix from the user's pairs (1 on the diagonal,
+// 0 where nothing was entered). Returns null when there are no correlations.
+function buildCorrMatrix(m, warnings) {
+  const idx = new Map(m.rows.map((r, i) => [r.id, i]));
+  const k = m.rows.length;
+  const C = Array.from({ length: k }, (_, i) => Array.from({ length: k }, (_, j) => i === j ? 1 : 0));
+  let any = false;
+  for (const c of m.corrs) {
+    const i = idx.get(c.a), j = idx.get(c.b);
+    if (i == null || j == null || i === j || !c.rho) continue;
+    // the entered coefficient is a rank (Spearman) one; Iman-Conover works with normal scores,
+    // so convert it to the matching Pearson correlation of normals: 2·sin(π·ρ/6)
+    C[i][j] = C[j][i] = 2 * Math.sin(Math.PI * Math.max(-1, Math.min(1, c.rho)) / 6);
+    any = true;
+  }
+  if (!any) return null;
+  if (cholesky(C)) return C;
+  // Contradictory inputs (e.g. A~B 0.9, B~C 0.9, A~C −0.9) can't all hold at once.
+  // Shrink all coefficients towards 0 in 2 % steps until the matrix becomes valid, and warn the user.
+  for (let lam = 0.02; lam <= 1.0001; lam += 0.02) {
+    const D = C.map((r, i) => r.map((x, j) => i === j ? 1 : x * (1 - lam)));
+    if (cholesky(D)) {
+      warnings.push(`Correlation matrix was inconsistent – all coefficients were reduced by ${Math.round(lam * 100)}%.`);
+      return D;
+    }
+  }
+  return null;
+}
+
+// q-th percentile (0–100) of a sorted array, interpolated between neighbours. P80 = percentile(sorted, 80).
+function percentile(sorted, q) {
+  const pos = (sorted.length - 1) * q / 100;
+  const lo = Math.floor(pos), hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+// Share of trials with total ≤ x (the opposite of percentile). Binary search, so it's fast even for 1M trials.
+function certainty(sorted, x) {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] <= x) lo = m + 1; else hi = m; }
+  return lo / sorted.length;
+}
+
+// Basic statistics of a sorted array. Skewness > 0 = longer tail to the right (typical for costs).
+function summary(sorted) {
+  const n = sorted.length;
+  let mean = 0;
+  for (const x of sorted) mean += x;
+  mean /= n;
+  let m2 = 0, m3 = 0;
+  for (const x of sorted) { const d = x - mean; m2 += d * d; m3 += d * d * d; }
+  const sd = Math.sqrt(m2 / (n - 1));
+  const skew = m2 > 0 ? (m3 / n) / Math.pow(m2 / n, 1.5) : 0;
+  return { n, mean, sd, skew, min: sorted[0], max: sorted[n - 1], median: percentile(sorted, 50) };
+}
+
+/* =====================================================================
+   SIMULATION
+   The heart of the tool. Takes a model, returns all results (no page
+   updates here – drawing is done by the render…() functions).
+   Data layout: one column per item, one entry per trial
+   (cols[item][trial]). Float64Array = fast fixed-size array of numbers.
+   ===================================================================== */
+function simulate(m) {
+  const n = m.prefs.trials | 0, rng = mulberry32(m.prefs.seed | 0);   // "| 0" = convert to a whole number
+
+  // 1) draw n values for each item
+  const cols = m.rows.map(r => {
+    const d = DISTRIBUTIONS[r.dist], col = new Float64Array(n);
+    // Latin Hypercube: split 0–1 into n equal slices and take exactly one u from each slice
+    // (in random order). The samples cover the whole range evenly, so results are stable
+    // with fewer trials than plain Monte Carlo, where u values can clump together by chance.
+    const perm = m.prefs.sampling === 'lhs' ? shuffle(Array.from({ length: n }, (_, i) => i), rng) : null;
+    for (let i = 0; i < n; i++) {
+      let u = perm ? (perm[i] + rng()) / n : rng();
+      u = Math.min(Math.max(u, 1e-12), 1 - 1e-12);   // never exactly 0 or 1 – the normal/lognormal inverse would return ±infinity
+      col[i] = d.inv(u, r.params);
+    }
+    return col;
+  });
+  // 2) apply correlations by reordering the values within each column
+  const warnings = [];
+  const C = buildCorrMatrix(m, warnings);
+  if (C) imanConover(cols, C, rng);
+
+  // 3) total of each trial; 4) sorted copy for percentiles and charts
+  const totals = new Float64Array(n), v = new Array(cols.length);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < cols.length; j++) v[j] = cols[j][i];
+    totals[i] = FORECAST(v);
+  }
+  const sorted = Float64Array.from(totals).sort();
+
+  // 5) sensitivity: rank correlation of each item with the total; squared and scaled to 100 %
+  //    it approximates each item's share of the total's variance (sign kept so negative drivers show up)
+  const rt = ranks(totals);
+  const rs = cols.map(c => pearson(ranks(c), rt));
+  const sumSq = rs.reduce((s, r) => s + r * r, 0) || 1;
+  const sens = m.rows.map((r, j) => ({ name: r.name, rho: rs[j], share: Math.sign(rs[j]) * rs[j] * rs[j] / sumSq }))
+    .filter(s => s.rho !== 0)    // fixed items have no influence – leave them out
+    .sort((a, b) => Math.abs(b.share) - Math.abs(a.share));
+
+  // 6) rank correlations actually achieved (shown in the "Achieved" column, to check against the target)
+  const idx = new Map(m.rows.map((r, i) => [r.id, i]));
+  const achieved = {};
+  for (const c of m.corrs) {
+    const i = idx.get(c.a), j = idx.get(c.b);
+    if (i != null && j != null && i !== j) achieved[c.a + '-' + c.b] = pearson(ranks(cols[i]), ranks(cols[j]));
+  }
+
+  return {
+    cols, totals, sorted, stats: summary(sorted), sens, achieved, warnings,
+    names: m.rows.map(r => r.name), info: `${m.prefs.sampling === 'lhs' ? 'LHS' : 'MC'}, ${n} trials, seed ${m.prefs.seed}`,
+  };
+}
+
+/* =====================================================================
+   STATE AND STORAGE
+   The whole app state lives in four variables:
+     model     - what the user entered (saved after every change)
+     lastRun   - result of the last simulate() call, or null
+     stale     - true when the model changed after lastRun (results out of date)
+     scenarios - saved runs for comparison
+   Saved in localStorage = a small key/value store inside the browser that
+   survives closing the page. ".v1" in the key allows a future format change.
+   Every access is wrapped in try/catch because storage can be blocked
+   (private mode, strict privacy settings) – the app then still works, it
+   just doesn't remember anything.
+   ===================================================================== */
+const LS_MODEL = 'mcCostRisk.model.v1', LS_SC = 'mcCostRisk.scenarios.v1';
+// deep copy via JSON, so editing the copy never changes the original (e.g. EXAMPLE_MODEL)
+const clone = o => JSON.parse(JSON.stringify(o));
+let model, lastRun = null, stale = false, scenarios = [];
+
+// gives every row without an id a new unique one
+function withIds(m) {
+  let id = 1;
+  for (const r of m.rows) if (r.id >= id) id = r.id + 1;
+  for (const r of m.rows) if (r.id == null) r.id = id++;
+  return m;
+}
+const nextId = () => model.rows.reduce((mx, r) => Math.max(mx, r.id), 0) + 1;
+
+// Loads the saved model, or an empty one. Missing settings are filled from DEFAULT_PREFS,
+// so data saved by an older version of the page still loads.
+function loadModel() {
+  try {
+    const s = localStorage.getItem(LS_MODEL);
+    if (s) {
+      const m = JSON.parse(s);
+      m.prefs = Object.assign(clone(DEFAULT_PREFS), m.prefs);
+      delete m.prefs.baseOverride;          // older saved data: the base is now always computed automatically
+      m.forecastName = TOTAL_NAME;
+      return withIds(m);
+    }
+  } catch (e) { /* no localStorage or corrupted data – start empty */ }
+  return withIds(clone(EMPTY_MODEL));
+}
+function saveModel() { try { localStorage.setItem(LS_MODEL, JSON.stringify(model)); } catch (e) {} }
+
+// Scenarios keep all their sorted trial totals so their charts can be redrawn later.
+// JSON can't store Float64Array, so they are saved as plain arrays rounded to 0.001
+// (keeps the stored text small – browsers allow only a few MB) and converted back on load.
+function loadScenarios() {
+  try {
+    const s = localStorage.getItem(LS_SC);
+    if (s) return JSON.parse(s).map(sc => ({ ...sc, sorted: Float64Array.from(sc.sorted) }));
+  } catch (e) {}
+  return [];
+}
+function saveScenarios() {
+  try {
+    localStorage.setItem(LS_SC, JSON.stringify(scenarios.map(sc => ({ ...sc, sorted: Array.from(sc.sorted, x => Math.round(x * 1000) / 1000) }))));
+  } catch (e) {}
+}
+
+/* =====================================================================
+   UI HELPERS
+   Short helper functions used everywhere below.
+   ===================================================================== */
+// $('x') = the element with id="x"
+const $ = id => document.getElementById(id);
+// Escapes text before it is put into HTML. Without it, an item named "<b>" would turn into
+// real HTML – user text must always go through esc().
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// number -> text with d decimals in Czech format (space as thousands separator, decimal comma); "–" for invalid numbers
+const fmt = (v, d = 1) => Number.isFinite(v) ? v.toLocaleString('cs-CZ', { minimumFractionDigits: d, maximumFractionDigits: d }) : '–';
+const pct = (v, d = 1) => Number.isFinite(v) ? fmt(v * 100, d) + ' %' : '–';
+// text -> number; accepts a decimal comma too ("1,5"); NaN when it isn't a number
+const num = v => { const x = parseFloat(String(v).replace(',', '.')); return Number.isFinite(x) ? x : NaN; };
+const round2 = v => Math.round(v * 100) / 100;
+// confidence level in %, kept within 0.1–99.9 (default 80)
+const level = () => Math.min(99.9, Math.max(0.1, num(model.prefs.level) || 80));
+const units = () => model.units ? ' ' + model.units : '';
+
+// base estimate (every item at its likeliest value) and theoretical mean, both through FORECAST()
+const getBase = () => FORECAST(model.rows.map(r => DISTRIBUTIONS[r.dist].likely(r.params)));
+const theoMean = () => FORECAST(model.rows.map(r => DISTRIBUTIONS[r.dist].mean(r.params)));
+
+// "Nice" axis values between lo and hi (about `count` of them): steps of 1, 2, 5 or 10 × a power of ten,
+// so the axis reads 6 000 / 6 500 / 7 000 instead of 6 037 / 6 512 / …
+function niceTicks(lo, hi, count) {
+  const span = hi - lo || 1, step0 = span / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0))), e = step0 / mag;
+  const step = (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1) * mag;
+  const t = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) t.push(+v.toFixed(10));
+  return t;
+}
+
+/* ---- help: popup window under the "?" buttons ----
+   One click listener on the whole document handles every "?" button ("event
+   delegation"): it checks what was clicked, so it also covers buttons that
+   didn't exist yet when the page loaded. Clicking the same "?" again, the ×,
+   outside the window, or pressing Escape closes it. */
+let popKey = null;   // which help text is open (null = none)
+function hidePop() {
+  $('pop').hidden = true; popKey = null;
+  document.querySelectorAll('button.help.on').forEach(b => b.classList.remove('on'));
+}
+document.addEventListener('click', e => {
+  if (e.target.closest && e.target.closest('.pop-close')) { hidePop(); return; }
+  const b = e.target.closest && e.target.closest('button.help');
+  if (b) {
+    const key = b.dataset.help;
+    if (popKey === key) { hidePop(); return; }
+    hidePop();
+    const pop = $('pop');
+    // the <h5> from the help text goes into the window's title bar
+    const html = HELP[key] || '', m = html.match(/<h5>(.*?)<\/h5>/);
+    pop.innerHTML = `<div class="tb"><span>${m ? m[1] : 'Help'}</span><button class="pop-close" title="Close">×</button></div>
+      <div class="bd">${m ? html.replace(m[0], '') : html}</div>`;
+    pop.hidden = false; popKey = key; b.classList.add('on');
+    // position: just below the button, kept inside the screen. Positions are measured in screen
+    // pixels, but the window is scaled by CSS zoom (0.8), so divide by z to convert
+    const z = parseFloat(getComputedStyle(pop).zoom) || 1;
+    const r = b.getBoundingClientRect(), w = pop.offsetWidth * z;
+    const left = Math.max(16, Math.min(r.left + window.scrollX - 20, window.scrollX + document.documentElement.clientWidth - w - 16));
+    pop.style.left = left / z + 'px';
+    pop.style.top = (r.bottom + window.scrollY + 8) / z + 'px';
+    return;
+  }
+  if (!e.target.closest('#pop')) hidePop();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePop(); });
+// close it when the window width changes (its position would be wrong). Only width: on phones,
+// scrolling shows/hides the address bar, which changes the height and would close it constantly
+let lastW = window.innerWidth;
+window.addEventListener('resize', () => { if (window.innerWidth !== lastW) { lastW = window.innerWidth; hidePop(); } });
+
+/* =====================================================================
+   MODEL – TABLE
+   Pattern used for every table in this file: build the HTML as one text
+   string and put it into the page with innerHTML. Each input carries
+   data-* attributes (data-id = row id, data-p = parameter index,
+   data-f = field name) so one listener on the table can tell which value
+   of which row changed.
+   ===================================================================== */
+
+// Rebuilds the whole model table. Called when rows are added/deleted or a distribution changes.
+function renderModel() {
+  const opts = sel => Object.entries(DISTRIBUTIONS)
+    .map(([k, d]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${d.label}</option>`).join('');
+  $('hero').hidden = model.rows.length > 0;
+  $('modelWrap').hidden = model.rows.length === 0;
+  let h = `<tr class="head"><th>Item</th><th>Distribution</th><th class="ctr" colspan="3">Parameters</th>
+    <th class="num">Base</th><th class="num">Mean</th><th></th></tr>`;
+  for (const r of model.rows) {
+    const d = DISTRIBUTIONS[r.dist];
+    // always 3 parameter cells; distributions with fewer parameters get empty cells
+    const cells = [0, 1, 2].map(i => i < d.params.length
+      ? `<td class="pc"><label class="pl">${d.params[i]}<input type="number" step="any" data-id="${r.id}" data-p="${i}" value="${Number.isFinite(r.params[i]) ? r.params[i] : ''}"></label></td>`
+      : '<td></td>').join('');
+    h += `<tr class="item">
+      <td><input type="text" data-id="${r.id}" data-f="name" value="${esc(r.name)}"></td>
+      <td><select data-id="${r.id}" data-f="dist">${opts(r.dist)}</select></td>
+      ${cells}
+      <td class="num val" id="base-${r.id}"></td><td class="num val" id="mean-${r.id}"></td>
+      <td><button class="x" data-del="${r.id}" title="Delete item">✕</button></td></tr>`;
+  }
+  // totals row
+  h += `<tr class="fc"><td></td><td></td>
+    <td colspan="3"></td><td class="num" id="baseTot"></td><td class="num" id="meanTot"></td><td></td></tr>`;
+  $('modelTable').innerHTML = h;
+  updateComputed();
+  renderStatus();
+}
+
+// Refreshes only the Base/Mean numbers. Used while typing: rebuilding the whole table
+// would destroy the input being typed into and the cursor would jump out of it.
+function updateComputed() {
+  for (const r of model.rows) {
+    const d = DISTRIBUTIONS[r.dist];
+    $('base-' + r.id).textContent = fmt(d.likely(r.params), 2);
+    $('mean-' + r.id).textContent = fmt(d.mean(r.params), 2);
+  }
+  $('baseTot').textContent = fmt(getBase(), 2);
+  $('meanTot').textContent = fmt(theoMean(), 2);
+}
+
+// When the user switches an item's distribution, translate the old parameters into sensible
+// new ones instead of wiping them: keep min/likeliest/max if known, otherwise build a ±10 %
+// range around the mean; std. dev. ≈ range / 6 (a range covers about ±3 std. dev.).
+function convertParams(oldDist, p, newDist) {
+  const three = d => d === 'triangular' || d === 'betapert';
+  const m = DISTRIBUTIONS[oldDist].mean(p) || 0;
+  let lo = m * 0.9, mode = m, hi = m * 1.1;
+  if (three(oldDist)) [lo, mode, hi] = p;
+  else if (oldDist === 'uniform') { [lo, hi] = p; mode = (lo + hi) / 2; }
+  switch (newDist) {
+    case 'triangular': case 'betapert': return [lo, mode, hi].map(round2);
+    case 'uniform': return [lo, hi].map(round2);
+    case 'normal': case 'lognormal': return [round2(m), round2((hi - lo) / 6) || 1];
+    case 'yesno': return [0.25, round2(m) || 10];
+    default: return [round2(mode)];
+  }
+}
+
+// After any model edit: save, mark results out of date, and redraw the correlation
+// table too if rows were added/removed (its drop-downs list the rows).
+function changed(structural) {
+  saveModel();
+  if (structural) renderCorr();
+  markStale();
+}
+
+// "input" fires on every keystroke (names, parameters); "change" fires once a drop-down choice is made.
+// The "+" in +t.dataset.id converts the attribute text to a number.
+$('modelTable').addEventListener('input', e => {
+  const t = e.target, r = model.rows.find(r => r.id === +t.dataset.id);
+  if (!r) return;
+  if (t.dataset.f === 'name') { r.name = t.value; saveModel(); renderCorr(); markStale(); return; }
+  if (t.dataset.p != null) { r.params[+t.dataset.p] = num(t.value); updateComputed(); changed(false); }
+});
+$('modelTable').addEventListener('change', e => {
+  const t = e.target, r = model.rows.find(r => r.id === +t.dataset.id);
+  if (!r || t.dataset.f !== 'dist') return;
+  r.params = convertParams(r.dist, r.params, t.value);
+  r.dist = t.value;
+  renderModel(); changed(false);
+});
+// delete button (✕): remove the row and every correlation that refers to it
+$('modelTable').addEventListener('click', e => {
+  const id = e.target.dataset && e.target.dataset.del;
+  if (!id) return;
+  model.rows = model.rows.filter(r => r.id !== +id);
+  model.corrs = model.corrs.filter(c => c.a !== +id && c.b !== +id);
+  renderModel(); changed(true);
+});
+$('addRow').onclick = () => {
+  model.rows.push({ id: nextId(), name: 'New item', dist: 'triangular', params: [90, 100, 120] });
+  renderModel(); changed(true);
+};
+
+/* ---- blank model / example model ---- */
+// is there anything the user would lose? (then ask before replacing it)
+const hasContent = () => model.rows.length > 0 || scenarios.length > 0;
+
+// Replaces everything with model m and redraws the whole page.
+function resetAll(m) {
+  model = withIds(clone(m));
+  scenarios = [];
+  lastRun = null; stale = false;
+  $('resultsCard').classList.remove('stale');
+  $('sensCard').classList.remove('stale');
+  $('runInfo').textContent = ''; $('runMsg').innerHTML = ''; $('scMsg').innerHTML = '';
+  initInputs(); renderModel(); renderCorr(); renderResults(); renderScenarios();
+}
+
+$('newBlank').onclick = () => {
+  if (hasContent() && !confirm('Start a new blank model? The current model and all saved scenarios will be deleted.')) return;
+  resetAll(EMPTY_MODEL);
+  try { localStorage.removeItem(LS_MODEL); localStorage.removeItem(LS_SC); } catch (e) {}
+};
+
+$('loadExample').onclick = () => {
+  if (hasContent() && !confirm('Replace the current model and scenarios with the example model?')) return;
+  resetAll(EXAMPLE_MODEL);
+  saveModel();
+  // two scenarios to demonstrate the comparison: without and with correlations.
+  // The second is saved only after run() finishes, so it's passed in as a callback
+  const indep = simulate({ ...model, corrs: [] });
+  addScenario('Independent items', indep, '');
+  run(() => addScenario('With correlations', lastRun, corrInfo()));
+};
+
+/* =====================================================================
+   CORRELATIONS
+   Same pattern as the model table: rebuild as an HTML string, one
+   listener per event type; data-i = index of the correlation in model.corrs.
+   ===================================================================== */
+function renderCorr() {
+  $('addCorr').disabled = model.rows.length < 2;
+  const opts = sel => model.rows.map(r => `<option value="${r.id}"${r.id === sel ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
+  renderStatus();
+  if (!model.corrs.length) {
+    $('corrTable').innerHTML = '<tr><td class="muted">No correlations - items are independent.</td></tr>';
+    return;
+  }
+  let h = '<tr class="head"><th>Item A</th><th>Item B</th><th class="num">Coefficient</th><th class="num">Achieved</th><th></th></tr>';
+  model.corrs.forEach((c, i) => {
+    // "Achieved" is shown only while the results match the model
+    const a = lastRun && !stale ? lastRun.achieved[c.a + '-' + c.b] : undefined;
+    h += `<tr><td><select data-i="${i}" data-f="a" style="max-width:150px">${opts(c.a)}</select></td>
+      <td><select data-i="${i}" data-f="b" style="max-width:150px">${opts(c.b)}</select></td>
+      <td class="num"><input type="number" step="0.05" min="-1" max="1" data-i="${i}" data-f="rho" value="${c.rho}" style="width:64px"></td>
+      <td class="num">${a === undefined ? '–' : fmt(a, 3)}</td>
+      <td><button class="x" data-cdel="${i}" title="Delete correlation">✕</button></td></tr>`;
+  });
+  $('corrTable').innerHTML = h;
+}
+$('corrTable').addEventListener('input', e => {
+  const t = e.target, c = model.corrs[+t.dataset.i];
+  if (!c) return;
+  if (t.dataset.f === 'rho') c.rho = num(t.value) || 0;
+  else c[t.dataset.f] = +t.value;
+  saveModel(); markStale();
+});
+$('corrTable').addEventListener('click', e => {
+  const i = e.target.dataset && e.target.dataset.cdel;
+  if (i == null) return;
+  model.corrs.splice(+i, 1);
+  renderCorr(); saveModel(); markStale();
+});
+// new correlation: first two items, 0.5 – the user then picks the right ones
+$('addCorr').onclick = () => {
+  if (model.rows.length < 2) return;
+  model.corrs.push({ a: model.rows[0].id, b: model.rows[1].id, rho: 0.5 });
+  renderCorr(); saveModel(); markStale();
+};
+
+/* =====================================================================
+   RUN
+   Settings inputs, the "results out of date" logic, validation and
+   starting a simulation.
+   ===================================================================== */
+
+// copies the model's settings into the input fields (on start and after a reset)
+function initInputs() {
+  $('fcUnits').value = model.units;
+  $('trials').value = model.prefs.trials;
+  $('sampling').value = model.prefs.sampling;
+  $('seed').value = model.prefs.seed;
+  $('level').value = model.prefs.level;
+  $('certX').value = Number.isFinite(model.prefs.certX) ? model.prefs.certX : '';
+}
+
+// Connects an input field to model.prefs[key]: on every change, store the value (null if not a number),
+// save, and call onChange. Trials/seed change the simulation -> markStale; confidence level and
+// budget only change how existing results are read -> just redraw, no new run needed.
+function bindPref(id, key, onChange, parse = num) {
+  $(id).addEventListener('input', () => {
+    const v = parse($(id).value);
+    model.prefs[key] = (parse === num && !Number.isFinite(v)) ? null : v;
+    saveModel(); onChange();
+  });
+}
+bindPref('trials', 'trials', markStale);
+bindPref('seed', 'seed', markStale);
+bindPref('level', 'level', () => { renderResults(); renderScenarios(); });
+bindPref('certX', 'certX', renderResults);
+$('sampling').addEventListener('change', () => { model.prefs.sampling = $('sampling').value; saveModel(); markStale(); });
+$('fcUnits').addEventListener('input', () => { model.units = $('fcUnits').value; saveModel(); renderResults(); renderScenarios(); });
+
+// The model changed after the last run: fade the results, show a note and make Run pulse.
+// The old results stay visible (faded) rather than being wiped, so they can still be compared.
+// The simulation is not re-run automatically – with many trials it would lag while typing.
+function markStale() {
+  if (!lastRun || stale) return;
+  stale = true;
+  $('resultsCard').classList.add('stale');
+  $('sensCard').classList.add('stale');
+  $('runMsg').innerHTML = '<div class="msg info">The model has changed – the results below belong to the previous run. Click <b>Run simulation</b>.</div>';
+  renderCorr();
+}
+
+// Checks the model before a run; returns a list of error messages (empty = OK).
+function validate() {
+  const errs = [];
+  if (!model.rows.length) errs.push('The model has no items.');
+  for (const r of model.rows) {
+    const d = DISTRIBUTIONS[r.dist];
+    if (r.params.slice(0, d.params.length).some(p => !Number.isFinite(p))) { errs.push(`${r.name}: fill in all parameters.`); continue; }
+    const c = d.check(r.params);
+    if (c) errs.push(`${r.name}: ${c}.`);
+  }
+  const n = model.prefs.trials;
+  if (!(n >= 100 && n <= 1000000)) errs.push('Number of trials must be 100 – 1,000,000.');
+  if (!Number.isFinite(model.prefs.seed)) errs.push('Enter a seed (integer).');
+  return errs;
+}
+
+// Validates, simulates and redraws. `after` = optional function to call when done.
+function run(after) {
+  const errs = validate();
+  if (errs.length) { $('runMsg').innerHTML = `<div class="msg err">${errs.map(esc).join('<br>')}</div>`; return; }
+  $('runInfo').textContent = 'Running…';
+  // The simulation blocks the page while it computes. A short delay lets the browser
+  // paint "Running…" first; otherwise the text would never appear.
+  setTimeout(() => {
+    const t0 = performance.now();
+    lastRun = simulate(model);
+    lastRun.base = getBase();
+    lastRun.ms = Math.round(performance.now() - t0);
+    stale = false;
+    $('resultsCard').classList.remove('stale');
+    $('sensCard').classList.remove('stale');
+    $('runInfo').textContent = '';
+    $('runMsg').innerHTML = lastRun.warnings.map(w => `<div class="msg warn">${esc(w)}</div>`).join('');
+    renderCorr(); renderResults();
+    if (typeof after === 'function') after();
+  }, 10);
+}
+$('run').onclick = () => run();
+
+/* =====================================================================
+   RESULTS
+   Charts are SVG built as text. An SVG has its own coordinate system set
+   by viewBox (here 760 wide); the browser scales it to the real width.
+   Margins: ml/mr/mt/mb = left/right/top/bottom space for the labels.
+   X(value) and Y(share) convert data values into SVG coordinates
+   (SVG y grows downwards, so Y flips the axis).
+   ===================================================================== */
+// shared chart frame: plot background, grid, axis numbers, axis titles, glossy gradients
+function chartFrame({ W, H, ml, mr, mt, mb, X, Y, lo, hi, ymax, yTicks, yDec, xLabel, yLabel, label }) {
+  const pw = W - ml - mr, ph = H - mt - mb;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
+    <defs>
+      <linearGradient id="cBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eceefc"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
+      <linearGradient id="cBarD" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#a6abf0"/><stop offset=".42" stop-color="#4b47b8"/><stop offset="1" stop-color="#2a2878"/></linearGradient>
+      <linearGradient id="cBarL" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f1f2fc"/><stop offset=".42" stop-color="#c3c6ec"/><stop offset="1" stop-color="#9fa4da"/></linearGradient>
+    </defs>
+    <rect x="${ml}" y="${mt}" width="${pw}" height="${ph}" fill="url(#cBg)" stroke="#cfd3ee"/>`;
+  for (const t of niceTicks(0, ymax, yTicks)) {
+    s += `<line class="grid" x1="${ml}" x2="${W - mr}" y1="${Y(t)}" y2="${Y(t)}"/>`;
+    s += `<text x="${ml - 8}" y="${Y(t) + 4}" text-anchor="end">${fmt(t * 100, yDec)} %</text>`;
+  }
+  for (const t of niceTicks(lo, hi, 8)) {
+    s += `<line class="grid" x1="${X(t)}" x2="${X(t)}" y1="${mt}" y2="${H - mb}"/>`;
+    s += `<line class="axis" x1="${X(t)}" x2="${X(t)}" y1="${H - mb}" y2="${H - mb + 5}"/>`;
+    s += `<text x="${X(t)}" y="${H - mb + 19}" text-anchor="middle">${fmt(t, 0)}</text>`;
+  }
+  s += `<text class="axlbl" x="${ml + pw / 2}" y="${H - 8}" text-anchor="middle">${esc(xLabel)}</text>`;
+  s += `<text class="axlbl" transform="translate(16 ${mt + ph / 2}) rotate(-90)" text-anchor="middle">${esc(yLabel)}</text>`;
+  return s;
+}
+// main axes are drawn last so they sit on top of the bars (in SVG, later = on top)
+const chartAxes = ({ W, H, ml, mr, mt, mb }) =>
+  `<line class="axis main" x1="${ml}" x2="${W - mr}" y1="${H - mb}" y2="${H - mb}"/><line class="axis main" x1="${ml}" x2="${ml}" y1="${mt}" y2="${H - mb}"/>`;
+// vertical marker line with a white outline, so it stays visible over the bars
+const marker = (x, y1, y2, color, w, dash) =>
+  `<line x1="${x}" x2="${x}" y1="${y1}" y2="${y2}" stroke="#fff" stroke-width="${w + 3}" stroke-opacity=".9"/>` +
+  `<line x1="${x}" x2="${x}" y1="${y1}" y2="${y2}" stroke="${color}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+
+// Histogram of the totals: 50 bars (bins), height = share of trials in that bin.
+// Bars up to the Pxx value are dark, the rest light – the dark area is the chosen confidence level.
+// Markers: Base (dashed orange), P50 (thin), Pxx (bold).
+function histogramSVG(sorted, base, p50, pxx) {
+  const W = 760, H = 330, ml = 70, mr = 16, mt = 14, mb = 54, n = sorted.length;
+  const lo = Math.min(sorted[0], base), hi = Math.max(sorted[n - 1], base);   // the range also includes base, so its marker is always on the chart
+  const nb = 50, bw = (hi - lo) / nb || 1, counts = new Array(nb).fill(0);
+  for (const x of sorted) counts[Math.min(nb - 1, Math.max(0, Math.floor((x - lo) / bw)))]++;
+  const ymax = Math.max(...counts) / n * 1.08;   // 8 % headroom above the tallest bar
+  const X = v => ml + (v - lo) / ((hi - lo) || 1) * (W - ml - mr);
+  const Y = f => H - mb - f / ymax * (H - mt - mb);
+  const g = { W, H, ml, mr, mt, mb, X, Y, lo, hi, ymax, yTicks: 4, yDec: 1,
+    xLabel: TOTAL_NAME + units().replace(/^ (.+)$/, ' ($1)'), yLabel: 'Share of trials', label: 'Distribution of the total' };
+  let s = chartFrame(g);
+  counts.forEach((c, b) => {
+    const x0 = X(lo + b * bw), x1 = X(lo + (b + 1) * bw), f = c / n;
+    const fill = lo + (b + 0.5) * bw <= pxx ? 'url(#cBarD)' : 'url(#cBarL)';
+    // <title> inside a shape = tooltip on mouse hover
+    s += `<rect x="${x0 + 0.6}" y="${Y(f)}" width="${Math.max(x1 - x0 - 1.2, 0.5)}" height="${H - mb - Y(f)}" rx="1.5" fill="${fill}"><title>${fmt(lo + b * bw)} – ${fmt(lo + (b + 1) * bw)}: ${c} trials</title></rect>`;
+  });
+  s += marker(X(base), mt, H - mb, '#b5531a', 2, '6 4');
+  s += marker(X(p50), mt, H - mb, '#16263b', 1.6);
+  s += marker(X(pxx), mt, H - mb, '#16263b', 3.4);
+  return s + chartAxes(g) + '</svg>';
+}
+
+// Fills panels 4 and 5 from lastRun: KPI tiles, histogram, statistics, percentiles, sensitivity bars.
+// Cheap (no simulation), so it is also called when only the confidence level or units change.
+function renderResults() {
+  $('resTitle').textContent = model.forecastName + (model.units ? ` (${model.units})` : '');
+  if (!lastRun) {
+    $('kpis').innerHTML = `<span class="muted">${model.rows.length ? 'No run yet - click Run simulation.' : 'Load the example model or add items, then run the simulation.'}</span>`;
+    $('histo').innerHTML = ''; $('statsTable').innerHTML = ''; $('pctTable').innerHTML = '';
+    $('tables').hidden = true;
+    $('sens').innerHTML = '<span class="muted">No results yet.</span>';
+    renderStatus();
+    return;
+  }
+  $('tables').hidden = false;
+  const { sorted, stats: s } = lastRun, L = level(), base = getBase(), u = units();
+  const pxx = percentile(sorted, L), p50 = percentile(sorted, 50);
+  // budget for "Probability that total ≤ x": the user's value, or the base estimate if the field is empty
+  const cx = Number.isFinite(model.prefs.certX) ? model.prefs.certX : base;
+  $('certX').placeholder = fmt(base, 1);
+  $('certIsBase').hidden = Math.abs(cx - base) > 1e-9 * Math.max(1, Math.abs(base));
+  const cert = certainty(sorted, cx);
+  // key-number tiles: v = value, l = label, r = small note on the right
+  const kpis = [
+    { v: pct(cert), l: `P(total) ≤ ${fmt(cx)}${u}` },
+    { v: fmt(pxx) + u, l: `P${fmt(L, 0)}`, r: `${fmt(L, 0)} % of trials below` },
+    { v: fmt(pxx - base) + u, l: 'Contingency', r: `P${fmt(L, 0)} − Base = ${pct((pxx - base) / base)} Base` },
+    { v: fmt(s.mean) + u, l: 'Mean' },
+    { v: fmt(s.sd) + u, l: 'Standard Deviation' },
+  ];
+  $('kpis').innerHTML = kpis.map(k => `<div class="kpi"><div class="v">${k.v}</div><div class="l">${esc(k.l)}${k.r ? `<span>${esc(k.r)}</span>` : ''}</div></div>`).join('');
+  $('histo').innerHTML = histogramSVG(sorted, base, p50, pxx) +
+    `<div class="legend"><span class="base">Base ${fmt(base)} (dashed)</span><b>P50 ${fmt(p50)}</b><b>P${fmt(L, 0)} ${fmt(pxx)} (bold)</b></div>`;
+  fitChartText();
+
+  const rows = [
+    ['Trials', s.n.toLocaleString('cs-CZ')], ['Base estimate', fmt(base, 2)], ['Mean', fmt(s.mean, 2)],
+    ['Theoretical mean (from parameters)', fmt(theoMean(), 2)], ['Median', fmt(s.median, 2)],
+    ['Standard deviation', fmt(s.sd, 2)], ['Coefficient of variation', pct(s.sd / s.mean, 2)], ['Skewness', fmt(s.skew, 3)],
+    ['Minimum', fmt(s.min, 2)], ['Maximum', fmt(s.max, 2)], ['Range', fmt(s.max - s.min, 2)],
+  ];
+  $('statsTable').innerHTML = '<tr class="head"><th>Statistic</th><th class="num">Value</th></tr>' +
+    rows.map(([a, b]) => `<tr><td>${a}</td><td class="num">${b}</td></tr>`).join('');
+
+  // standard percentiles plus the chosen level (a Set drops it if it's already in the list); its row is highlighted
+  const qs = [...new Set([5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, L])].sort((a, b) => a - b);
+  $('pctTable').innerHTML = '<tr class="head"><th>Percentile</th><th class="num">Value</th><th class="num">vs. Base</th></tr>' +
+    qs.map(q => {
+      const v = percentile(sorted, q);
+      return `<tr class="${q === L ? 'hl' : ''}"><td>P${fmt(q, q % 1 ? 1 : 0)}</td><td class="num">${fmt(v, 2)}</td><td class="num">${v - base >= 0 ? '+' : ''}${fmt(v - base, 2)}</td></tr>`;
+    }).join('');
+
+  // sensitivity bars: the biggest share fills the full width, the others are scaled to it
+  const maxShare = Math.max(...lastRun.sens.map(x => Math.abs(x.share)), 1e-9);
+  $('sens').innerHTML = lastRun.sens.length
+    ? `<div class="sens-row sens-head"><div class="sens-name">Item</div><div>Contribution to variance of the total</div>
+        <div class="sens-rho">Share</div><div class="sens-val" title="Rank (Spearman) correlation of the item with the total">Rank corr.</div></div>` +
+      lastRun.sens.map((x, i) => `<div class="sens-row">
+      <div class="sens-name">${esc(x.name)}</div>
+      <div><div class="sens-bar ${x.share < 0 ? 'neg' : i === 0 ? 'top' : ''}" style="width:${Math.abs(x.share) / maxShare * 100}%"></div></div>
+      <div class="sens-rho"><span class="rho ${x.share < 0 ? 'neg' : ''}">${x.share < 0 ? '−' : ''}${fmt(Math.abs(x.share) * 100, 1)} %</span></div>
+      <div class="sens-val">${x.rho < 0 ? '−' : '+'}${fmt(Math.abs(x.rho), 2)}</div></div>`).join('')
+    : '<span class="muted">No random items.</span>';
+  renderStatus();
+}
+
+// Downloads every trial (each item + total) as a CSV file for Excel.
+// Formatted for Czech Excel: ";" as separator and decimal comma. The invisible "﻿"
+// mark at the start (BOM) tells Excel the file is UTF-8, so accents and € display correctly.
+// The file is created in memory (Blob) and downloaded through a temporary link.
+$('exportCsv').onclick = () => {
+  if (!lastRun) return;
+  const f = v => String(Math.round(v * 1e6) / 1e6).replace('.', ',');
+  const lines = [['Trial', ...lastRun.names, model.forecastName].map(x => `"${String(x).replace(/"/g, '""')}"`).join(';')];
+  for (let i = 0; i < lastRun.totals.length; i++) {
+    lines.push([i + 1, ...lastRun.cols.map(c => f(c[i])), f(lastRun.totals[i])].join(';'));
+  }
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'mc_cost_risk_trials.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+/* =====================================================================
+   SCENARIOS + COMPARISON
+   A scenario is a snapshot of a run: its name, base, sorted totals and a
+   settings note. All its statistics are recomputed from the sorted totals,
+   so changing the confidence level updates the table too.
+   ===================================================================== */
+// one colour per scenario (repeats after 8)
+const COLORS = ['#4b47b8', '#b5531a', '#2f855a', '#8e1f7e', '#c53030', '#319795', '#975a16', '#4a5568'];
+
+// text for the "Settings" column, e.g. ", correlations: 3"
+const corrInfo = () => { const k = model.corrs.filter(c => c.rho).length; return k ? `, correlations: ${k}` : ''; };
+
+function addScenario(name, res, extra) {
+  scenarios.push({ name, base: getBase(), sorted: Float64Array.from(res.sorted), info: res.info + extra, show: true });
+  saveScenarios(); renderScenarios();
+}
+
+// only up-to-date results can be saved – otherwise the scenario wouldn't match the model it claims to describe
+$('saveSc').onclick = () => {
+  if (!lastRun || stale) {
+    $('scMsg').innerHTML = '<div class="msg err">Run the simulation with the current model first.</div>';
+    return;
+  }
+  addScenario($('scName').value.trim() || `Scenario ${scenarios.length + 1}`, lastRun, corrInfo());
+  $('scName').value = '';
+  $('scMsg').innerHTML = '';
+};
+
+// Comparison table; Δ = difference of each scenario's Pxx from the first scenario's.
+function renderScenarios() {
+  renderStatus();
+  if (!scenarios.length) {
+    $('scTable').innerHTML = '<tr><td class="muted">No scenarios yet. Run the simulation and save it under a name, then change the model and save again to compare.</td></tr>';
+    $('overlay').innerHTML = '';
+    return;
+  }
+  const L = level(), Ls = fmt(L, 0);
+  let h = `<tr class="head"><th></th><th>Scenario</th><th class="num">Mean</th><th class="num">Std. Dev.</th><th class="num">P50</th>
+    <th class="num">P${Ls}</th><th class="num">Base</th><th class="num">Contingency P${Ls}</th><th class="num">Contingency %</th>
+    <th class="num">Prob. ≤ Base</th><th class="num">Δ P${Ls} vs. 1st</th><th>Settings</th><th></th></tr>`;
+  const p0 = percentile(scenarios[0].sorted, L);
+  scenarios.forEach((sc, i) => {
+    const s = summary(sc.sorted), pxx = percentile(sc.sorted, L);
+    h += `<tr><td><input type="checkbox" data-show="${i}" ${sc.show ? 'checked' : ''} title="Show in chart"></td>
+      <td><span class="sw" style="background:${COLORS[i % COLORS.length]}"></span>${esc(sc.name)}</td>
+      <td class="num">${fmt(s.mean)}</td><td class="num">${fmt(s.sd)}</td><td class="num">${fmt(s.median)}</td>
+      <td class="num"><b>${fmt(pxx)}</b></td><td class="num">${fmt(sc.base)}</td>
+      <td class="num"><b>${fmt(pxx - sc.base)}</b></td><td class="num">${pct((pxx - sc.base) / sc.base)}</td>
+      <td class="num">${pct(certainty(sc.sorted, sc.base))}</td>
+      <td class="num">${i ? (pxx - p0 >= 0 ? '+' : '') + fmt(pxx - p0) : '–'}</td>
+      <td class="muted">${esc(sc.info)}</td>
+      <td><button class="x" data-scdel="${i}" title="Delete scenario">✕</button></td></tr>`;
+  });
+  $('scTable').innerHTML = h;
+  renderOverlay();
+}
+
+// ✕ deletes a scenario; the checkbox shows/hides it in the chart
+$('scTable').addEventListener('click', e => {
+  const d = e.target.dataset || {};
+  if (d.scdel != null) { scenarios.splice(+d.scdel, 1); saveScenarios(); renderScenarios(); }
+  if (d.show != null) { scenarios[+d.show].show = e.target.checked; saveScenarios(); renderOverlay(); }
+});
+document.querySelectorAll('input[name=ovMode]').forEach(r => r.addEventListener('change', renderOverlay));
+
+// Chart with all visible scenarios on one shared x-axis.
+//   Frequency  = histogram drawn as a line (how often each total occurs).
+//   Cumulative = S-curve: probability that the total is ≤ x. Where a curve crosses
+//                the dashed Pxx line, read off that scenario's Pxx budget.
+function renderOverlay() {
+  const list = scenarios.map((sc, i) => ({ ...sc, color: COLORS[i % COLORS.length] })).filter(sc => sc.show);
+  if (!list.length) { $('overlay').innerHTML = ''; return; }
+  const mode = document.querySelector('input[name=ovMode]:checked').value;
+  const W = 760, H = 340, ml = 70, mr = 16, mt = 14, mb = 54;
+  const lo = Math.min(...list.map(s => s.sorted[0])), hi = Math.max(...list.map(s => s.sorted[s.sorted.length - 1]));
+  const X = v => ml + (v - lo) / ((hi - lo) || 1) * (W - ml - mr);
+  let series, ymax;
+  // series = for each scenario, a list of [x, y] points
+  if (mode === 'freq') {
+    // count trials in 50 bins; one point per bin centre, plus 0 at both ends so the shape is closed
+    const nb = 50, bw = (hi - lo) / nb || 1;
+    series = list.map(sc => {
+      const c = new Array(nb).fill(0);
+      for (const x of sc.sorted) c[Math.min(nb - 1, Math.max(0, Math.floor((x - lo) / bw)))]++;
+      return [[lo, 0], ...c.map((k, b) => [lo + (b + 0.5) * bw, k / sc.sorted.length]), [hi, 0]];
+    });
+    ymax = Math.max(...series.flat().map(p => p[1])) * 1.08;
+  } else {
+    // 201 points: the value of P0, P0.5, P1 … P100
+    series = list.map(sc => Array.from({ length: 201 }, (_, i) => [percentile(sc.sorted, i / 2), i / 200]));
+    ymax = 1.02;
+  }
+  const Y = f => H - mb - f / ymax * (H - mt - mb);
+  const g = { W, H, ml, mr, mt, mb, X, Y, lo, hi, ymax, yTicks: mode === 'cum' ? 5 : 4, yDec: mode === 'cum' ? 0 : 1,
+    xLabel: TOTAL_NAME + units().replace(/^ (.+)$/, ' ($1)'),
+    yLabel: mode === 'cum' ? 'Probability total ≤ x' : 'Share of trials', label: 'Scenario comparison' };
+  let s = chartFrame(g);
+  if (mode === 'cum') {
+    // horizontal dashed line at the confidence level
+    const L = level() / 100;
+    s += `<line x1="${ml}" x2="${W - mr}" y1="${Y(L)}" y2="${Y(L)}" stroke="#b5531a" stroke-width="1.4" stroke-dasharray="5 4"/>`;
+    s += `<text x="${W - mr - 4}" y="${Y(L) - 6}" text-anchor="end" style="fill:#b5531a;font-weight:700">P${fmt(level(), 0)}</text>`;
+  }
+  series.forEach((pts, i) => {
+    const P = pts.map(p => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ');
+    // light fill under the curve (frequency only), then a white outline + thick coloured line,
+    // so overlapping curves stay distinguishable
+    if (mode === 'freq') s += `<polygon points="${P}" fill="${list[i].color}" fill-opacity=".07"/>`;
+    s += `<polyline fill="none" stroke="#fff" stroke-width="6.5" stroke-opacity=".95" stroke-linejoin="round" stroke-linecap="round" points="${P}"/>`;
+    s += `<polyline fill="none" stroke="${list[i].color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="${P}"/>`;
+  });
+  s += chartAxes(g) + '</svg>';
+  s += `<div class="legend">${list.map(sc => `<span><span class="sw" style="background:${sc.color}"></span>${esc(sc.name)}</span>`).join('')}</div>`;
+  $('overlay').innerHTML = s;
+  fitChartText();
+}
+
+/* =====================================================================
+   STATUS: LEDs in the tabs, the RUN button, the status bar
+   ===================================================================== */
+// the six sections in order: [element id, name]
+const STEPS = [
+  ['sec-model', 'Model & Assumptions'], ['sec-corr', 'Correlations'], ['sec-run', 'Simulate'],
+  ['resultsCard', 'Results'], ['sensCard', 'Sensitivity'], ['sec-scen', 'Scenarios'],
+];
+
+// Updates every "how far along am I" indicator. Called from all render functions, so it's
+// always current. (model is undefined for a moment during start-up – hence the guard.)
+function renderStatus() {
+  if (!model) return;
+  const fresh = lastRun && !stale;
+  // LED state per section: ok = done, stale = out of date, opt = optional, '' = nothing yet
+  const st = [
+    model.rows.length ? 'ok' : '',
+    model.corrs.length ? 'ok' : 'opt',
+    stale ? 'stale' : lastRun ? 'ok' : '',
+    fresh ? 'ok' : stale ? 'stale' : '',
+    fresh ? 'ok' : stale ? 'stale' : '',
+    scenarios.length ? 'ok' : 'opt',
+  ];
+  STEPS.forEach(([id], i) => {
+    const led = document.querySelector(`.tabs a[data-go="${id}"] .tled`);
+    if (led) led.className = 'tled' + (st[i] ? ' ' + st[i] : '');
+  });
+  $('runTop').classList.toggle('pulse', !!stale);
+  $('runTop').disabled = !model.rows.length;
+  $('led').className = 'led' + (stale ? ' stale' : lastRun ? ' ok' : '');
+  $('statusTxt').textContent = stale ? 'Model changed - press RUN to update the results'
+    : lastRun ? `Results up to date · ${lastRun.info}${lastRun.ms != null ? ` · ${lastRun.ms} ms` : ''}` : model.rows.length ? 'Ready - press RUN' : 'No model yet - load the example or add items';
+}
+
+// the toolbar Run and the big start buttons just reuse the existing actions
+$('runTop').onclick = () => run();
+$('heroExample').onclick = () => $('loadExample').onclick();
+$('heroScratch').onclick = () => $('addRow').onclick();
+
+/* ---- navigation: tabs + steps ----
+   Clicking a tab scrolls to its section. While scrolling, the "scroll spy"
+   highlights the tab of the section currently under the toolbar. */
+document.addEventListener('click', e => {
+  const g = e.target.closest && e.target.closest('[data-go]');   // closest() = the clicked element or its nearest parent matching the selector
+  if (!g) return;
+  e.preventDefault();
+  $(g.dataset.go).scrollIntoView({ block: 'start' });
+  setActive(g.dataset.go);
+  spyLock = Date.now() + 1200;   // after a click keep the chosen tab highlighted for 1.2 s, while the smooth scroll passes other sections
+});
+// highlights the tab(s) with the given id(s); [].concat accepts one id or a list
+function setActive(ids) {
+  ids = [].concat(ids);
+  document.querySelectorAll('[data-go]').forEach(a => a.classList.toggle('on', ids.includes(a.dataset.go)));
+}
+// active = the last section whose top edge has already scrolled under the tab bar (140 px from the top)
+// (panels side by side – Correlations and Simulate – share the same top edge, so both get highlighted)
+let spyLock = 0;
+function spy() {
+  if (Date.now() < spyLock) return;
+  let cur = [STEPS[0][0]], curTop = -Infinity;
+  for (const [id] of STEPS) {
+    const top = $(id).getBoundingClientRect().top;
+    if (top > 140) continue;
+    if (Math.abs(top - curTop) <= 1) cur.push(id);
+    else if (top > curTop) { cur = [id]; curTop = top; }
+  }
+  // at the very bottom the last section may be too short to reach the top – highlight it anyway
+  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) cur = [STEPS[STEPS.length - 1][0]];
+  setActive(cur);
+}
+// The scroll event fires many times per frame; requestAnimationFrame runs spy() at most once
+// per screen refresh. "passive" tells the browser we never block scrolling, so it stays smooth.
+let spyQueued = false;
+window.addEventListener('scroll', () => {
+  if (spyQueued) return;
+  spyQueued = true;
+  requestAnimationFrame(() => { spyQueued = false; spy(); });
+}, { passive: true });
+
+// A chart is scaled to its box (viewBox), and its text scales with it – too small on a phone, too big
+// on a wide screen. Fix: set the font size in SVG units so that it comes out as 12.5 px on screen,
+// like the rest of the page. Recalculated whenever the window size changes.
+function fitChartText() {
+  document.querySelectorAll('#histo svg, #overlay svg').forEach(svg => {
+    const w = svg.clientWidth, vb = svg.viewBox.baseVal.width;
+    if (w > 0) svg.style.setProperty('--fs', (12.5 * vb / w).toFixed(2) + 'px');
+  });
+}
+window.addEventListener('resize', fitChartText);
+
+/* =====================================================================
+   START
+   Runs once when the page opens: load saved data, fill the inputs, draw
+   every panel, highlight the right tab. If a saved model exists, run it
+   straight away – raw trials aren't stored, so results are recomputed
+   (same seed = same results as last time).
+   ===================================================================== */
+model = loadModel();
+scenarios = loadScenarios();
+initInputs();
+renderModel();
+renderCorr();
+renderResults();
+renderScenarios();
+spy();
+if (model.rows.length) run();
+</script>
+</body>
+</html>
