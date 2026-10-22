@@ -1,13 +1,9 @@
 # MC//Cost Risk
 
-**Monte Carlo cost risk analysis in a single HTML file. Know your P80.** **[• Live demo](https://frantis3k.github.io/monte-carlo-price-risk-modeling/mc_cost_risk.html)**
+**Simple Monte Carlo cost risk analysis in a single HTML file -> [• Live demo](https://frantis3k.github.io/monte-carlo-cost-risk-analysis/mc_cost_risk.html)**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![No install](https://img.shields.io/badge/install-none-brightgreen)
-![Single file](https://img.shields.io/badge/size-1%20HTML%20file-blue)
-![Dependencies](https://img.shields.io/badge/dependencies-0-blue)
 
-![MC//Cost Risk GIF](docs/mc_cost_risk_demo.gif)
+![MC//Cost Risk GIF](docs/mc_cost_risk_banner.png)
 
 You list the cost items of a project and describe how uncertain each one is, for example "min 900, most likely 950, max 1 150". The tool then simulates thousands of random versions of the project (trials), adds the items up in each one and shows how the total is spread. From that you read off:
 
@@ -22,7 +18,7 @@ Y2K Futurism inspired design just for the love of it.
 
 ## Quick start
 
-**Try it online:** open the [live demo](https://frantis3k.github.io/monte-carlo-price-risk-modeling/mc_cost_risk.html), nothing to download.
+**Try it online:** open the [live demo](https://frantis3k.github.io/monte-carlo-cost-risk-analysis/mc_cost_risk.html), nothing to download.
 
 **Or just open it locally**
 
@@ -30,6 +26,7 @@ Y2K Futurism inspired design just for the love of it.
 2. Double-click it to open it in any modern browser (Chrome, Edge, Firefox or Safari).
 3. Click **Load Example** to see a complete model, or **Start from Scratch**.
 
+![MC//Cost Risk GIF](docs/mc_cost_risk_demo.gif)
 
 ---
 
